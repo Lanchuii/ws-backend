@@ -18,15 +18,15 @@ try {
   
 router.post('/schedule', async (req: Request, res: Response) => {
 try {
-    const { leader, acoustic } = req.body;
+    const { date, leader, backup1, backup2, acoustic, electric, keyboard, bass, drums } = req.body;
 
-    if (!leader || !acoustic) {
-    return res.status(400).json({
-        message: 'Send all required fields',
-    });
+    if (!date || !leader || !backup1 || !backup2 || !acoustic || !electric || !keyboard || !bass || !drums ) {
+        return res.status(400).json({
+            message: 'Send all required fields',
+        });
     }
 
-    const newSched = await Schedule.create({ leader, acoustic });
+    const newSched = await Schedule.create({ date, leader, backup1, backup2, acoustic, electric, keyboard, bass, drums });
     res.status(201).json(newSched);
 } catch (error) {
     console.error(error);
