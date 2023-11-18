@@ -20,9 +20,9 @@ router.post('/schedule', async (req: Request, res: Response) => {
 try {
     const { date, leader, backup1, backup2, acoustic, electric, keyboard, bass, drums } = req.body;
 
-    if (!date || !leader || !backup1 || !backup2 || !acoustic || !electric || !keyboard || !bass || !drums ) {
+    if (!date || !leader || !backup1 || !backup2 || !acoustic || !bass || !drums ) {
         return res.status(400).json({
-            message: 'Send all required fields',
+            message: 'Send required fields',
         });
     }
 
@@ -38,15 +38,14 @@ router.put('/schedule/:id', async (req: Request, res: Response) => {
 const id = req.params.id;
 
 try {
-    const { leader, acoustic } = req.body;
+    const { date, leader, backup1, backup2, acoustic, electric, keyboard, bass, drums } = req.body;
 
-    if (!leader || !acoustic) {
-    return res.status(400).json({
-        message: 'Send all required fields',
-    });
+    if (!date || !leader || !backup1 || !backup2 || !acoustic || !bass || !drums ) {
+        return res.status(400).json({
+            message: 'Send required fields',
+        });
     }
-
-    const updatedSched = await Schedule.findByIdAndUpdate(id, { leader, acoustic }, { new: true });
+    const updatedSched = await Schedule.findByIdAndUpdate(id, { date, leader, backup1, backup2, acoustic, electric, keyboard, bass, drums }, { new: true });
     res.status(201).json(updatedSched);
 } catch (error) {
     console.error(error);

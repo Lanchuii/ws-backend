@@ -19,8 +19,8 @@ const schedSchema = new Schema(
     backup1: { type: String, required: true },
     backup2: { type: String, required: true },
     acoustic: { type: String, required: true },
-    electric: { type: String, required: true },
-    keyboard: { type: String, required: true },
+    electric: { type: String, required: false },
+    keyboard: { type: String, required: false },
     bass: { type: String, required: true },
     drums: { type: String, required: true }
   }
