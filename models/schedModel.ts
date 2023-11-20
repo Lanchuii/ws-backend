@@ -26,4 +26,4 @@ const schedSchema = new Schema(
   }
 )
 
-export const Schedule = model<ISchedule>('User', schedSchema);
+export const Schedule = model<ISchedule>('Main', schedSchema);
