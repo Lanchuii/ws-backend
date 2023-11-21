@@ -1,4 +1,3 @@
-import { PORT, URL } from './config';
 import express from 'express';
 import mongoose, { mongo } from 'mongoose';
 import cors from 'cors'
@@ -9,6 +8,7 @@ dotenv.config();
 
 const app = express();
 const mongodbURL: string = process.env.MONGODB_URL || '';
+const PORT = process.env.PORT || 3000
 
 app.use(express.json());
 
