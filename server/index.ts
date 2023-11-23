@@ -1,8 +1,7 @@
 import express from 'express';
-import mongoose, { mongo } from 'mongoose';
-import cors from 'cors'
-import SchedRoutes from './scheduleRoutes';
 import dotenv from 'dotenv';
+import { configureApp } from '../config/app';
+import { connectToDatabase } from '../config/db';
 
 dotenv.config();
 
@@ -10,14 +9,9 @@ const app = express();
 const mongodbURL: string = process.env.MONGODB_URL || '';
 const PORT = process.env.PORT || 3000
 
-app.use(express.json());
+configureApp(app)
 
-app.use(cors())
-
-app.use('/', SchedRoutes)
-
-mongoose
-  .connect(mongodbURL)
+connectToDatabase(mongodbURL)
   .then(() => {
     console.log('App connected to database');
     app.listen(PORT, () => {
