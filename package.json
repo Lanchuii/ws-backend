@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.ts",
   "scripts": {
-    "start": "set NODE_ENV=production && node ./dist/server/index.js",
+    "start": "node ./dist/server/index.js",
     "dev": "nodemon server/index.ts",
     "build": "npm install && tsc",
     "tsc": "tsc"
