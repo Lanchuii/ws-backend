@@ -13,3 +13,4 @@ node_modules/
 *.njsproj
 *.sln
 .env
+/dist
