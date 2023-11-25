@@ -1,0 +1,7 @@
+version: '3'
+services:
+  ws-db:
+    image: mongo:latest
+    container_name: ws-db
+    ports:
+      - "27017:27017"
