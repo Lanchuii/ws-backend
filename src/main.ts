@@ -1,8 +1,15 @@
 import { NestFactory } from '@nestjs/core';
+import { webcrypto } from 'crypto';
 import { AppModule } from './app.module';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { ValidationPipe } from '@nestjs/common';
+
+if (!globalThis.crypto) {
+  Object.defineProperty(globalThis, 'crypto', {
+    value: webcrypto,
+  });
+}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
