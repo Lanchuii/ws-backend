@@ -1,11 +1,15 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsEnum, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsEnum, IsMongoId, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { WorkerLabel } from 'src/common/enums/worker-label.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
 import { LeaderSongDto } from './leader-song.dto';
 
 export class CreateWorkerDto {
+  @IsOptional()
+  @IsMongoId()
+  user_id?: string | null;
+
   @IsNotEmpty()
   @IsString()
   name: string;

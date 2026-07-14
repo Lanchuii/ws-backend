@@ -1,8 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
 import { WorkerLabel } from 'src/common/enums/worker-label.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
+import { User } from 'src/users/schemas/users.schema';
 
 export type WorkerDocument = Worker & Document;
 
@@ -17,6 +18,9 @@ export class LeaderSong {
 
 @Schema({ timestamps: true })
 export class Worker {
+  @Prop({ type: Types.ObjectId, ref: User.name })
+  user_id?: Types.ObjectId;
+
   @Prop({ required: true, trim: true })
   name!: string;
 
@@ -34,3 +38,5 @@ export class Worker {
 }
 
 export const WorkerSchema = SchemaFactory.createForClass(Worker);
+
+WorkerSchema.index({ user_id: 1 }, { unique: true, sparse: true });

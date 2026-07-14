@@ -13,6 +13,7 @@ describe('WorkersService', () => {
     getRecordById: jest.fn(),
     updateRecord: jest.fn(),
     deleteRecord: jest.fn(),
+    findByUserId: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -25,6 +26,7 @@ describe('WorkersService', () => {
 
     service = module.get<WorkersService>(WorkersService);
     jest.clearAllMocks();
+    repository.findByUserId.mockResolvedValue(null);
   });
 
   it('should be defined', () => {
@@ -73,6 +75,33 @@ describe('WorkersService', () => {
       { _id: 'worker-id' },
       { status: WorkerStatus.Inactive },
     );
+  });
+
+  it('links a member account to a worker', async () => {
+    repository.updateRecord.mockResolvedValue({
+      _id: 'worker-id',
+      user_id: '507f1f77bcf86cd799439011',
+      name: 'Peter',
+    });
+
+    const worker = await service.updateWorker('worker-id', {
+      user_id: '507f1f77bcf86cd799439011',
+    });
+
+    expect(worker.user_id).toBe('507f1f77bcf86cd799439011');
+  });
+
+  it('rejects an account already linked to another worker', async () => {
+    repository.findByUserId.mockResolvedValue({
+      _id: 'another-worker-id',
+      user_id: '507f1f77bcf86cd799439011',
+    });
+
+    await expect(
+      service.updateWorker('worker-id', {
+        user_id: '507f1f77bcf86cd799439011',
+      }),
+    ).rejects.toThrow('already linked');
   });
 
   it('deletes a worker', async () => {

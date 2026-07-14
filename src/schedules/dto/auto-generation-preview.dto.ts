@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { ServiceType } from 'src/common/enums/service-type.enum';
 
 export class AutoGenerationPreviewDto {
   @Type(() => Number)
@@ -13,6 +14,10 @@ export class AutoGenerationPreviewDto {
   @Min(1)
   @Max(12)
   month: number;
+
+  @IsOptional()
+  @IsEnum(ServiceType)
+  service_type?: ServiceType;
 
   @IsOptional()
   @IsBoolean()

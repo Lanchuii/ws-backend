@@ -4,6 +4,7 @@ export enum WorkerRole {
   Acoustic = 'Acoustic',
   Bass = 'Bass',
   Drums = 'Drums',
+  Beatbox = 'Beatbox',
   Keyboard = 'Keyboard',
   Electric = 'Electric',
 }

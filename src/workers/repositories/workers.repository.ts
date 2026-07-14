@@ -10,4 +10,8 @@ export class WorkersRepository extends BaseRepository<WorkerDocument> {
   ) {
     super(workerModel);
   }
+
+  async findByUserId(userId: string) {
+    return await this.workerModel.findOne({ user_id: userId }).lean().exec();
+  }
 }

@@ -41,12 +41,23 @@ export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
     return await this.scheduleModel.find(query).sort({ date: 'asc' }).lean().exec();
   }
 
-  async findMainScheduleOnDate(date: Date) {
+  async findScheduleOnDate(date: Date, serviceType: ServiceType) {
     return await this.scheduleModel
       .findOne({
         date,
-        service_type: ServiceType.Main,
+        service_type: serviceType,
       })
+      .lean()
+      .exec();
+  }
+
+  async findWorkerAssignments(workerId: string, fromDate: Date) {
+    return await this.scheduleModel
+      .find({
+        date: { $gte: fromDate },
+        'assignments.worker_id': new Types.ObjectId(workerId),
+      })
+      .sort({ date: 'asc', service_type: 'asc' })
       .lean()
       .exec();
   }

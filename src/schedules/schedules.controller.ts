@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Roles } from 'src/auth/decorators/roles.decorator';
+import type { AuthenticatedRequest } from 'src/auth/guards/jwt-auth.guard';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { UserRole } from 'src/common/enums/user-role.enum';
@@ -19,6 +20,11 @@ export class SchedulesController {
   @Get()
   async getAllSchedules(@Query() query: any) {
     return await this.schedulesService.getAllSchedules(query);
+  }
+
+  @Get('my-assignments')
+  async getMyAssignments(@Req() request: AuthenticatedRequest) {
+    return await this.schedulesService.getMyAssignments(request.user.sub);
   }
 
   @Post('sync-statuses')
