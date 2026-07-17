@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { WorkerLabel } from 'src/common/enums/worker-label.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
@@ -18,7 +18,7 @@ export class LeaderSong {
 
 @Schema({ timestamps: true })
 export class Worker {
-  @Prop({ type: Types.ObjectId, ref: User.name })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: User.name })
   user_id?: Types.ObjectId;
 
   @Prop({ required: true, trim: true })
