@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
 import { ServiceType } from 'src/common/enums/service-type.enum';
+import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
 import { WorkersService } from 'src/workers/workers.service';
@@ -59,6 +60,7 @@ describe('SchedulesService', () => {
     repository.findScheduleOnDate.mockResolvedValue(null);
     repository.insertRecord.mockImplementation(async (data) => data);
     scheduleAutoGenerationService.isGenerationDate.mockReturnValue(true);
+    workersService.findWorkerByUserId.mockResolvedValue(null);
     workersService.getWorkerById.mockImplementation(async (id: string) => {
       const workers = {
         [leaderId]: {
@@ -146,6 +148,64 @@ describe('SchedulesService', () => {
       worker: null,
       items: [],
     });
+  });
+
+  it('allows the assigned leader to update a schedule lineup', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    repository.getRecordById.mockResolvedValue({
+      _id: scheduleId,
+      assignments: [
+        {
+          role: WorkerRole.Leader,
+          worker_id: new Types.ObjectId(leaderId),
+        },
+      ],
+    });
+    workersService.findWorkerByUserId.mockResolvedValue({
+      _id: new Types.ObjectId(leaderId),
+    });
+    repository.updateRecord.mockResolvedValue({
+      _id: scheduleId,
+      lineup: 'https://open.spotify.com/playlist/example',
+    });
+
+    const schedule = await service.updateScheduleLineup(
+      scheduleId,
+      ' https://open.spotify.com/playlist/example ',
+      'user-id',
+      UserRole.Member,
+    );
+
+    expect(schedule.lineup).toBe('https://open.spotify.com/playlist/example');
+    expect(repository.updateRecord).toHaveBeenCalledWith(
+      { _id: scheduleId },
+      { lineup: 'https://open.spotify.com/playlist/example' },
+    );
+  });
+
+  it('rejects lineup updates from members who are not the assigned leader', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    repository.getRecordById.mockResolvedValue({
+      _id: scheduleId,
+      assignments: [
+        {
+          role: WorkerRole.Leader,
+          worker_id: new Types.ObjectId(leaderId),
+        },
+      ],
+    });
+    workersService.findWorkerByUserId.mockResolvedValue({
+      _id: new Types.ObjectId(acousticId),
+    });
+
+    await expect(
+      service.updateScheduleLineup(
+        scheduleId,
+        'New lineup',
+        'user-id',
+        UserRole.Member,
+      ),
+    ).rejects.toThrow('assigned leader');
   });
 
   it('creates a schedule when required roles are present', async () => {

@@ -1,7 +1,14 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerLabel } from 'src/common/enums/worker-label.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
 import { CreateWorkerDto } from './dto/create-worker.dto';
+import { LeaderSongDto } from './dto/leader-song.dto';
 import { UpdateWorkerDto } from './dto/update-worker.dto';
 import { WorkersRepository } from './repositories/workers.repository';
 
@@ -40,6 +47,29 @@ export class WorkersService {
 
   async findWorkerByUserId(userId: string) {
     return await this.workersRepository.findByUserId(userId);
+  }
+
+  async updateMyLeaderSongs(userId: string, leaderSongs: LeaderSongDto[]) {
+    const worker = await this.findWorkerByUserId(userId);
+
+    if (!worker) {
+      throw new ForbiddenException('Your account is not linked to a worker');
+    }
+
+    if (!worker.roles?.includes(WorkerRole.Leader)) {
+      throw new ForbiddenException('Only leaders can manage leader songs');
+    }
+
+    const updatedWorker = await this.workersRepository.updateRecord(
+      { _id: worker._id } as any,
+      { leader_songs: leaderSongs } as any,
+    );
+
+    if (!updatedWorker) {
+      throw new NotFoundException('Worker not found');
+    }
+
+    return updatedWorker;
   }
 
   async updateWorker(id: string, dto: UpdateWorkerDto) {

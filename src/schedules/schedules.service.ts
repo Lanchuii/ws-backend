@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,6 +8,7 @@ import { Cron } from '@nestjs/schedule';
 import { Types } from 'mongoose';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
 import { ServiceType } from 'src/common/enums/service-type.enum';
+import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
 import { WorkersService } from 'src/workers/workers.service';
@@ -76,6 +78,8 @@ export class SchedulesService {
       worker: {
         _id: worker._id,
         name: worker.name,
+        roles: worker.roles,
+        leader_songs: worker.leader_songs || [],
       },
       items,
     };
@@ -221,6 +225,42 @@ export class SchedulesService {
     }
 
     return schedule;
+  }
+
+  async updateScheduleLineup(
+    id: string,
+    lineup: string,
+    userId: string,
+    userRole: UserRole,
+  ) {
+    const schedule = await this.getScheduleById(id);
+
+    if (userRole !== UserRole.Admin) {
+      const worker = await this.workersService.findWorkerByUserId(userId);
+      const isAssignedLeader = worker && schedule.assignments.some((assignment) => {
+        return (
+          assignment.role === WorkerRole.Leader &&
+          assignment.worker_id.toString() === worker._id.toString()
+        );
+      });
+
+      if (!isAssignedLeader) {
+        throw new ForbiddenException(
+          'Only the assigned leader can edit this schedule lineup',
+        );
+      }
+    }
+
+    const updatedSchedule = await this.schedulesRepository.updateRecord(
+      { _id: id } as any,
+      { lineup: lineup.trim() } as any,
+    );
+
+    if (!updatedSchedule) {
+      throw new NotFoundException('Schedule not found');
+    }
+
+    return updatedSchedule;
   }
 
   async deleteScheduleById(id: string) {

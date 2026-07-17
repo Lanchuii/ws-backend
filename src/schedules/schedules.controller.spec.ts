@@ -26,6 +26,7 @@ describe('SchedulesController', () => {
             getScheduleById: jest.fn(),
             createSchedule: jest.fn(),
             updateScheduleById: jest.fn(),
+            updateScheduleLineup: jest.fn(),
             deleteScheduleById: jest.fn(),
           },
         },

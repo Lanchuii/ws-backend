@@ -7,6 +7,7 @@ import { UserRole } from 'src/common/enums/user-role.enum';
 import { AutoGenerationConfirmDto } from './dto/auto-generation-confirm.dto';
 import { AutoGenerationPreviewDto } from './dto/auto-generation-preview.dto';
 import { CreateScheduleDTO } from './dto/create-schedule.dto';
+import { UpdateScheduleLineupDto } from './dto/update-schedule-lineup.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { SchedulesService } from './schedules.service';
 
@@ -54,6 +55,20 @@ export class SchedulesController {
   @Roles(UserRole.Admin)
   async createSchedule(@Body() dto: CreateScheduleDTO) {
     return await this.schedulesService.createSchedule(dto);
+  }
+
+  @Patch(':id/lineup')
+  async updateScheduleLineup(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: UpdateScheduleLineupDto,
+  ) {
+    return await this.schedulesService.updateScheduleLineup(
+      id,
+      dto.lineup,
+      request.user.sub,
+      request.user.role as UserRole,
+    );
   }
 
   @Patch(':id')

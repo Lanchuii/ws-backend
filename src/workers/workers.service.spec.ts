@@ -91,6 +91,41 @@ describe('WorkersService', () => {
     expect(worker.user_id).toBe('507f1f77bcf86cd799439011');
   });
 
+  it('allows a linked leader to update their songs', async () => {
+    repository.findByUserId.mockResolvedValue({
+      _id: 'worker-id',
+      roles: [WorkerRole.Leader],
+    });
+    repository.updateRecord.mockResolvedValue({
+      _id: 'worker-id',
+      roles: [WorkerRole.Leader],
+      leader_songs: [{ title: 'Goodness of God', key: 'G' }],
+    });
+
+    const worker = await service.updateMyLeaderSongs('user-id', [
+      { title: 'Goodness of God', key: 'G' },
+    ]);
+
+    expect(worker.leader_songs).toEqual([
+      { title: 'Goodness of God', key: 'G' },
+    ]);
+    expect(repository.updateRecord).toHaveBeenCalledWith(
+      { _id: 'worker-id' },
+      { leader_songs: [{ title: 'Goodness of God', key: 'G' }] },
+    );
+  });
+
+  it('rejects leader-song updates from a linked non-leader', async () => {
+    repository.findByUserId.mockResolvedValue({
+      _id: 'worker-id',
+      roles: [WorkerRole.Bass],
+    });
+
+    await expect(
+      service.updateMyLeaderSongs('user-id', []),
+    ).rejects.toThrow('Only leaders');
+  });
+
   it('rejects an account already linked to another worker', async () => {
     repository.findByUserId.mockResolvedValue({
       _id: 'another-worker-id',

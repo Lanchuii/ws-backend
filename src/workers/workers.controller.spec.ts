@@ -20,6 +20,7 @@ describe('WorkersController', () => {
           useValue: {
             getWorkers: jest.fn(),
             getWorkerById: jest.fn(),
+            updateMyLeaderSongs: jest.fn(),
             createWorker: jest.fn(),
             updateWorker: jest.fn(),
             deleteWorker: jest.fn(),
