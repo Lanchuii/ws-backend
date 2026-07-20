@@ -3,12 +3,10 @@ import {
   ArrayNotEmpty,
   IsArray,
   IsDateString,
-  IsEnum,
   IsOptional,
   IsString,
   ValidateNested,
 } from 'class-validator';
-import { ServiceType } from 'src/common/enums/service-type.enum';
 import { ScheduleAssignmentDto } from './schedule-assignment.dto';
 import { ScheduleSongDto } from './schedule-song.dto';
 
@@ -17,8 +15,8 @@ export class AutoGenerationConfirmScheduleDto {
   date: string;
 
   @IsOptional()
-  @IsEnum(ServiceType)
-  service_type?: ServiceType;
+  @IsString()
+  service_type?: string;
 
   @IsArray()
   @ArrayNotEmpty()

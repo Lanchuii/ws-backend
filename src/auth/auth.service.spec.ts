@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { UserRole } from 'src/common/enums/user-role.enum';
@@ -11,6 +11,7 @@ describe('AuthService', () => {
   const usersService = {
     findByLogin: jest.fn(),
     findById: jest.fn(),
+    createUser: jest.fn(),
     toPublicUser: jest.fn((user) => {
       const { password_hash, ...publicUser } = user;
       return publicUser;
@@ -64,6 +65,46 @@ describe('AuthService', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('rejects login while an account is pending verification', async () => {
+    usersService.findByLogin.mockResolvedValue({
+      ...user(),
+      is_verified: false,
+    });
+    passwordService.verifyPassword.mockResolvedValue(true);
+
+    await expect(
+      service.login({
+        login: 'admin@example.com',
+        password: 'password123',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('creates a pending member without issuing tokens on signup', async () => {
+    usersService.createUser.mockResolvedValue({
+      ...user(),
+      role: UserRole.Member,
+      is_verified: false,
+    });
+
+    const result = await service.signup({
+      email: 'member@example.com',
+      username: 'member',
+      password: 'password123',
+    });
+
+    expect(usersService.createUser).toHaveBeenCalledWith({
+      email: 'member@example.com',
+      username: 'member',
+      password: 'password123',
+      role: UserRole.Member,
+      is_active: true,
+      is_verified: false,
+    });
+    expect(result.verificationRequired).toBe(true);
+    expect(result).not.toHaveProperty('accessToken');
+  });
+
   it('returns new tokens for a valid refresh token', async () => {
     jwtService.verifyAsync.mockResolvedValue({
       sub: 'user-id',
@@ -81,6 +122,21 @@ describe('AuthService', () => {
     expect(usersService.findById).toHaveBeenCalledWith('user-id');
   });
 
+  it('rejects refresh tokens for unverified users', async () => {
+    jwtService.verifyAsync.mockResolvedValue({
+      sub: 'user-id',
+      type: 'refresh',
+    });
+    usersService.findById.mockResolvedValue({
+      ...user(),
+      is_verified: false,
+    });
+
+    await expect(
+      service.refresh({ refreshToken: 'refresh-token' }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   function user() {
     return {
       _id: 'user-id',
@@ -89,6 +145,7 @@ describe('AuthService', () => {
       password_hash: 'hash',
       role: UserRole.Admin,
       is_active: true,
+      is_verified: true,
     };
   }
 });

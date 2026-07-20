@@ -6,11 +6,12 @@ import { UserRole } from 'src/common/enums/user-role.enum';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateUserVerificationDto } from './dto/update-user-verification.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.Admin)
+@Roles(UserRole.SuperAdmin)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
@@ -22,6 +23,12 @@ export class UsersController {
   @Get()
   async getUsers() {
     return await this.usersService.getUsers();
+  }
+
+  @Get('linkable')
+  @Roles(UserRole.Admin)
+  async getLinkableUsers() {
+    return await this.usersService.getLinkableUsers();
   }
 
   @Get(':id')
@@ -37,5 +44,16 @@ export class UsersController {
   @Patch(':id/role')
   async updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto) {
     return await this.usersService.updateUserRole(id, dto.role);
+  }
+
+  @Patch(':id/verification')
+  async updateUserVerification(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserVerificationDto,
+  ) {
+    return await this.usersService.updateUserVerification(
+      id,
+      dto.is_verified,
+    );
   }
 }

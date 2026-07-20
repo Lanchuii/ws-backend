@@ -20,6 +20,15 @@ export class RolesGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
 
-    return requiredRoles.includes(request.user?.role as UserRole);
+    const currentRole = request.user?.role as UserRole;
+    const roleRank: Record<UserRole, number> = {
+      [UserRole.Member]: 0,
+      [UserRole.Admin]: 1,
+      [UserRole.SuperAdmin]: 2,
+    };
+
+    return requiredRoles.some((requiredRole) => {
+      return roleRank[currentRole] >= roleRank[requiredRole];
+    });
   }
 }

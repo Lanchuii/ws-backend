@@ -9,6 +9,8 @@ import { WorkersService } from 'src/workers/workers.service';
 import { SchedulesRepository } from './repositories/schedules.repository';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
 import { SchedulesService } from './schedules.service';
+import { ServiceTypesService } from 'src/service-types/service-types.service';
+import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
 
 describe('SchedulesService', () => {
   let service: SchedulesService;
@@ -34,10 +36,14 @@ describe('SchedulesService', () => {
   const workersService = {
     getWorkerById: jest.fn(),
     findWorkerByUserId: jest.fn(),
+    getWorkerGroupIds: jest.fn(),
   };
   const scheduleAutoGenerationService = {
     preview: jest.fn(),
     isGenerationDate: jest.fn(),
+  };
+  const serviceTypesService = {
+    getByCode: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -50,6 +56,7 @@ describe('SchedulesService', () => {
           provide: ScheduleAutoGenerationService,
           useValue: scheduleAutoGenerationService,
         },
+        { provide: ServiceTypesService, useValue: serviceTypesService },
       ],
     }).compile();
 
@@ -61,6 +68,10 @@ describe('SchedulesService', () => {
     repository.insertRecord.mockImplementation(async (data) => data);
     scheduleAutoGenerationService.isGenerationDate.mockReturnValue(true);
     workersService.findWorkerByUserId.mockResolvedValue(null);
+    workersService.getWorkerGroupIds.mockResolvedValue([]);
+    serviceTypesService.getByCode.mockImplementation(async (code: string) => {
+      return getServiceTypeConfiguration(code);
+    });
     workersService.getWorkerById.mockImplementation(async (id: string) => {
       const workers = {
         [leaderId]: {
@@ -208,6 +219,28 @@ describe('SchedulesService', () => {
     ).rejects.toThrow('assigned leader');
   });
 
+  it('allows super admins to update any schedule lineup', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    repository.getRecordById.mockResolvedValue({
+      _id: scheduleId,
+      assignments: [],
+    });
+    repository.updateRecord.mockResolvedValue({
+      _id: scheduleId,
+      lineup: 'Updated by super admin',
+    });
+
+    const schedule = await service.updateScheduleLineup(
+      scheduleId,
+      'Updated by super admin',
+      'super-admin-id',
+      UserRole.SuperAdmin,
+    );
+
+    expect(schedule.lineup).toBe('Updated by super admin');
+    expect(workersService.findWorkerByUserId).not.toHaveBeenCalled();
+  });
+
   it('creates a schedule when required roles are present', async () => {
     const schedule = await service.createSchedule({
       date: '2099-07-12',
@@ -334,7 +367,7 @@ describe('SchedulesService', () => {
           { role: WorkerRole.Keyboard, worker_id: bassId },
         ],
       }),
-    ).rejects.toThrow('only support Leader, Acoustic, Bass, and Drums/Beatbox');
+    ).rejects.toThrow('Keyboard is not supported');
   });
 
   it('rejects schedules missing required roles', async () => {
@@ -346,7 +379,7 @@ describe('SchedulesService', () => {
           (assignment) => assignment.role !== WorkerRole.Drums,
         ),
       }),
-    ).rejects.toThrow('Missing required roles: Drums');
+    ).rejects.toThrow('Missing required assignments: Drums');
   });
 
   it('rejects duplicate worker assignments in the same schedule', async () => {
@@ -372,6 +405,48 @@ describe('SchedulesService', () => {
         assignments: validAssignments(),
       }),
     ).rejects.toThrow('already assigned');
+  });
+
+  it('rejects a weekly service scheduled outside its configured weekday', async () => {
+    const configured = getServiceTypeConfiguration(ServiceType.Main);
+    serviceTypesService.getByCode.mockResolvedValue({
+      ...configured,
+      name: 'Monday Service',
+      recurrence: {
+        type: 'weekly',
+        weekday:
+          (new Date('2099-07-12T00:00:00Z').getUTCDay() + 1) % 7,
+      },
+    });
+
+    await expect(
+      service.createSchedule({
+        date: '2099-07-12',
+        service_type: ServiceType.Main,
+        assignments: validAssignments(),
+      }),
+    ).rejects.toThrow('configured weekday');
+  });
+
+  it('rejects a worker outside the configured worker groups', async () => {
+    const configured = getServiceTypeConfiguration(ServiceType.Main);
+    serviceTypesService.getByCode.mockResolvedValue({
+      ...configured,
+      worker_eligibility: {
+        mode: WorkerEligibilityMode.Groups,
+        allowed_group_ids: ['allowed-group'],
+        preferred_group_ids: ['allowed-group'],
+      },
+    });
+    workersService.getWorkerGroupIds.mockResolvedValue(['different-group']);
+
+    await expect(
+      service.createSchedule({
+        date: '2099-07-12',
+        service_type: ServiceType.Main,
+        assignments: validAssignments(),
+      }),
+    ).rejects.toThrow('not eligible');
   });
 
   it('rejects inactive workers', async () => {
@@ -403,7 +478,7 @@ describe('SchedulesService', () => {
           },
         ],
       }),
-    ).rejects.toThrow('Missing required roles: Bass, Drums');
+    ).rejects.toThrow('Missing required assignments: Bass, Drums');
   });
 
   it('confirms an auto-generated Youth schedule with its service type', async () => {
@@ -435,5 +510,59 @@ describe('SchedulesService', () => {
       { role: WorkerRole.Bass, worker_id: bassId },
       { role: WorkerRole.Drums, worker_id: drumsId },
     ];
+  }
+
+  function getServiceTypeConfiguration(code: string) {
+    const eligibility = {
+      mode: WorkerEligibilityMode.Any,
+      allowed_group_ids: [],
+      preferred_group_ids: [],
+    };
+    const slot = (
+      key: string,
+      label: string,
+      allowed_roles: WorkerRole[],
+      required: boolean,
+      display_order: number,
+    ) => ({ key, label, allowed_roles, required, display_order });
+    const mainSlots = [
+      slot('leader', 'Leader', [WorkerRole.Leader], true, 10),
+      slot('backup', 'Backup', [WorkerRole.Backup], false, 20),
+      slot('acoustic', 'Acoustic', [WorkerRole.Acoustic], true, 30),
+      slot('electric', 'Electric', [WorkerRole.Electric], false, 40),
+      slot('bass', 'Bass', [WorkerRole.Bass], true, 50),
+      slot('keyboard', 'Keyboard', [WorkerRole.Keyboard], false, 60),
+      slot('drums', 'Drums', [WorkerRole.Drums], true, 70),
+    ];
+    const nonMainSlots = [
+      slot('leader', 'Leader', [WorkerRole.Leader], true, 10),
+      slot(
+        'instrument',
+        code === ServiceType.Midweek ? 'Acoustic / Keyboard' : 'Acoustic',
+        code === ServiceType.Midweek
+          ? [WorkerRole.Acoustic, WorkerRole.Keyboard]
+          : [WorkerRole.Acoustic],
+        true,
+        20,
+      ),
+      slot('bass', 'Bass', [WorkerRole.Bass], false, 30),
+      slot(
+        'percussion',
+        'Drums / Beatbox',
+        [WorkerRole.Drums, WorkerRole.Beatbox],
+        false,
+        40,
+      ),
+    ];
+
+    return {
+      code,
+      name: `${code} service`,
+      recurrence: { type: 'once' },
+      worker_eligibility: eligibility,
+      assignment_slots: code === ServiceType.Main ? mainSlots : nonMainSlots,
+      is_active: true,
+      auto_generation_enabled: true,
+    };
   }
 });

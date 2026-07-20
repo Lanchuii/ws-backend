@@ -20,6 +20,9 @@ export class User {
 
   @Prop({ default: true })
   is_active!: boolean;
+
+  @Prop({ default: false })
+  is_verified!: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

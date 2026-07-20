@@ -2,8 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { WorkerLabel } from 'src/common/enums/worker-label.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
+import { UserRole } from 'src/common/enums/user-role.enum';
+import { UsersService } from 'src/users/users.service';
 import { WorkersRepository } from './repositories/workers.repository';
 import { WorkersService } from './workers.service';
+import { WorkerGroupsService } from 'src/worker-groups/worker-groups.service';
 
 describe('WorkersService', () => {
   let service: WorkersService;
@@ -15,18 +18,37 @@ describe('WorkersService', () => {
     deleteRecord: jest.fn(),
     findByUserId: jest.fn(),
   };
+  const usersService = {
+    findById: jest.fn(),
+  };
+  const workerGroupsService = {
+    ensureDefaults: jest.fn(),
+    getByCodes: jest.fn(),
+    assertIdsExist: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WorkersService,
         { provide: WorkersRepository, useValue: repository },
+        { provide: UsersService, useValue: usersService },
+        { provide: WorkerGroupsService, useValue: workerGroupsService },
       ],
     }).compile();
 
     service = module.get<WorkersService>(WorkersService);
     jest.clearAllMocks();
     repository.findByUserId.mockResolvedValue(null);
+    usersService.findById.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439011',
+      role: UserRole.Member,
+      is_active: true,
+      is_verified: true,
+    });
+    workerGroupsService.getByCodes.mockResolvedValue([
+      { _id: 'main-group-id', code: 'main' },
+    ]);
   });
 
   it('should be defined', () => {
@@ -40,6 +62,7 @@ describe('WorkersService', () => {
       label: WorkerLabel.Main,
       status: WorkerStatus.Active,
       leader_songs: [],
+      worker_group_ids: ['main-group-id'],
     });
 
     const worker = await service.createWorker({
@@ -52,6 +75,7 @@ describe('WorkersService', () => {
       name: 'Peter',
       roles: [WorkerRole.Leader, WorkerRole.Acoustic],
       label: WorkerLabel.Main,
+      worker_group_ids: ['main-group-id'],
       status: WorkerStatus.Active,
       leader_songs: [],
     });
@@ -137,6 +161,21 @@ describe('WorkersService', () => {
         user_id: '507f1f77bcf86cd799439011',
       }),
     ).rejects.toThrow('already linked');
+  });
+
+  it('rejects linking an unverified member account', async () => {
+    usersService.findById.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439011',
+      role: UserRole.Member,
+      is_active: true,
+      is_verified: false,
+    });
+
+    await expect(
+      service.updateWorker('worker-id', {
+        user_id: '507f1f77bcf86cd799439011',
+      }),
+    ).rejects.toThrow('active, verified member');
   });
 
   it('deletes a worker', async () => {

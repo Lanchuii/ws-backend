@@ -7,6 +7,7 @@ import { Schedule, ScheduleSchema } from './schemas/schedules.schema';
 import { AuthModule } from 'src/auth/auth.module';
 import { WorkersModule } from 'src/workers/workers.module';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
+import { ServiceTypesModule } from 'src/service-types/service-types.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { ScheduleAutoGenerationService } from './schedule-auto-generation.servic
     ]),
     AuthModule,
     WorkersModule,
+    ServiceTypesModule,
   ],
   providers: [SchedulesService, ScheduleAutoGenerationService, SchedulesRepository],
   controllers: [SchedulesController]

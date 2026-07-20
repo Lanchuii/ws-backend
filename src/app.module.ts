@@ -7,6 +7,8 @@ import { WorkersModule } from './workers/workers.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from './auth/auth.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { WorkerGroupsModule } from './worker-groups/worker-groups.module';
+import { ServiceTypesModule } from './service-types/service-types.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { ScheduleModule } from '@nestjs/schedule';
     AuthModule,
     SchedulesModule,
     WorkersModule,
+    WorkerGroupsModule,
+    ServiceTypesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

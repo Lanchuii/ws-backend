@@ -7,7 +7,6 @@ import {
 import { Cron } from '@nestjs/schedule';
 import { Types } from 'mongoose';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
-import { ServiceType } from 'src/common/enums/service-type.enum';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
@@ -19,33 +18,16 @@ import { ScheduleAssignmentDto } from './dto/schedule-assignment.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
 import { SchedulesRepository } from './repositories/schedules.repository';
+import { ServiceTypesService } from 'src/service-types/service-types.service';
+import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
 
 @Injectable()
 export class SchedulesService {
-  private readonly mainRequiredRoles = [
-    WorkerRole.Leader,
-    WorkerRole.Acoustic,
-    WorkerRole.Bass,
-    WorkerRole.Drums,
-  ];
-
-  private readonly nonMainRequiredRoles = [
-    WorkerRole.Leader,
-    WorkerRole.Acoustic,
-  ];
-
-  private readonly nonMainAllowedRoles = new Set([
-    WorkerRole.Leader,
-    WorkerRole.Acoustic,
-    WorkerRole.Bass,
-    WorkerRole.Drums,
-    WorkerRole.Beatbox,
-  ]);
-
   constructor(
     private readonly schedulesRepository: SchedulesRepository,
     private readonly workersService: WorkersService,
     private readonly scheduleAutoGenerationService: ScheduleAutoGenerationService,
+    private readonly serviceTypesService: ServiceTypesService,
   ) {}
 
   async getAllSchedules(query: any = {}) {
@@ -97,7 +79,21 @@ export class SchedulesService {
 
   async createSchedule(dto: CreateScheduleDTO) {
     const date = this.normalizeScheduleDate(dto.date);
-    const serviceType = dto.service_type || ServiceType.Main;
+    const serviceType = await this.serviceTypesService.getByCode(
+      dto.service_type || 'main',
+      true,
+    );
+    this.validateRecurrenceDate(date, serviceType);
+    const existingSchedule = await this.schedulesRepository.findScheduleOnDate(
+      date,
+      serviceType.code,
+    );
+
+    if (existingSchedule) {
+      throw new BadRequestException(
+        `A ${serviceType.name} schedule already exists for this date`,
+      );
+    }
     const assignments = await this.validateAndBuildAssignments(
       dto.assignments,
       date,
@@ -106,7 +102,7 @@ export class SchedulesService {
 
     return await this.schedulesRepository.insertRecord({
       date,
-      service_type: serviceType,
+      service_type: serviceType.code,
       status: dto.status || this.getStatusForDate(date),
       assignments,
       songs: dto.songs || [],
@@ -127,18 +123,22 @@ export class SchedulesService {
     for (const schedule of dto.schedules) {
       const date = this.normalizeScheduleDate(schedule.date);
       const dateKey = date.toISOString().slice(0, 10);
-      const serviceType = schedule.service_type || ServiceType.Main;
-      const scheduleKey = `${dateKey}:${serviceType}`;
+      const serviceTypeCode = schedule.service_type || 'main';
+      const serviceType = await this.serviceTypesService.getByCode(
+        serviceTypeCode,
+        true,
+      );
+      const scheduleKey = `${dateKey}:${serviceType.code}`;
 
-      if (!this.scheduleAutoGenerationService.isGenerationDate(serviceType, date)) {
+      if (!(await this.scheduleAutoGenerationService.isGenerationDate(serviceType.code, date))) {
         throw new BadRequestException(
-          `${dateKey} is not a valid auto-generation date for ${serviceType}`,
+          `${dateKey} is not a valid auto-generation date for ${serviceType.name}`,
         );
       }
 
       if (seenDates.has(scheduleKey)) {
         throw new BadRequestException(
-          `Duplicate generated ${serviceType} schedule date: ${dateKey}`,
+          `Duplicate generated ${serviceType.name} schedule date: ${dateKey}`,
         );
       }
 
@@ -146,12 +146,12 @@ export class SchedulesService {
 
       const existingSchedule = await this.schedulesRepository.findScheduleOnDate(
         date,
-        serviceType,
+        serviceType.code,
       );
 
       if (existingSchedule) {
         throw new BadRequestException(
-          `A ${serviceType} service schedule already exists for ${dateKey}`,
+          `A ${serviceType.name} schedule already exists for ${dateKey}`,
         );
       }
 
@@ -178,7 +178,7 @@ export class SchedulesService {
 
       preparedSchedules.push({
         date,
-        service_type: serviceType,
+        service_type: serviceType.code,
         status: this.getStatusForDate(date),
         assignments,
         songs: schedule.songs || [],
@@ -201,7 +201,23 @@ export class SchedulesService {
   async updateScheduleById(id: string, dto: UpdateScheduleDto) {
     const existing = await this.getScheduleById(id);
     const date = dto.date ? this.normalizeScheduleDate(dto.date) : existing.date;
-    const serviceType = dto.service_type || existing.service_type || ServiceType.Main;
+    const serviceType = await this.serviceTypesService.getByCode(
+      dto.service_type || existing.service_type || 'main',
+      Boolean(dto.service_type),
+    );
+    this.validateRecurrenceDate(date, serviceType);
+    const conflictingSchedule =
+      await this.schedulesRepository.findScheduleOnDate(
+        date,
+        serviceType.code,
+        id,
+      );
+
+    if (conflictingSchedule) {
+      throw new BadRequestException(
+        `A ${serviceType.name} schedule already exists for this date`,
+      );
+    }
     const update: any = { ...dto, date };
 
     if (dto.assignments) {
@@ -235,7 +251,10 @@ export class SchedulesService {
   ) {
     const schedule = await this.getScheduleById(id);
 
-    if (userRole !== UserRole.Admin) {
+    if (
+      userRole !== UserRole.Admin &&
+      userRole !== UserRole.SuperAdmin
+    ) {
       const worker = await this.workersService.findWorkerByUserId(userId);
       const isAssignedLeader = worker && schedule.assignments.some((assignment) => {
         return (
@@ -291,17 +310,20 @@ export class SchedulesService {
   private async validateAndBuildAssignments(
     assignments: ScheduleAssignmentDto[],
     date: Date,
-    serviceType: ServiceType,
+    serviceType: any,
     excludeScheduleId?: string,
   ) {
     if (!assignments?.length) {
       throw new BadRequestException('At least one assignment is required');
     }
 
-    this.validateServiceStructure(assignments, serviceType);
-    this.validateNoDuplicateWorkers(assignments);
+    const slottedAssignments = this.validateServiceStructure(
+      assignments,
+      serviceType,
+    );
+    this.validateNoDuplicateWorkers(slottedAssignments);
 
-    const workerIds = assignments.map(
+    const workerIds = slottedAssignments.map(
       (assignment) => new Types.ObjectId(assignment.worker_id),
     );
     const conflict = await this.schedulesRepository.findWorkerConflictOnDate(
@@ -317,7 +339,7 @@ export class SchedulesService {
     }
 
     return await Promise.all(
-      assignments.map(async (assignment) => {
+      slottedAssignments.map(async (assignment) => {
         const worker = await this.workersService.getWorkerById(
           assignment.worker_id,
         );
@@ -332,7 +354,24 @@ export class SchedulesService {
           );
         }
 
+        const slot = serviceType.assignment_slots.find(
+          (item) => item.key === assignment.slot_key,
+        );
+        const eligibility =
+          slot?.worker_eligibility_override ??
+          serviceType.worker_eligibility;
+        const workerGroupIds = await this.workersService.getWorkerGroupIds(
+          worker,
+        );
+
+        if (!this.isWorkerEligible(workerGroupIds, eligibility)) {
+          throw new BadRequestException(
+            `${worker.name} is not eligible for ${slot?.label ?? assignment.role} in ${serviceType.name}`,
+          );
+        }
+
         return {
+          slot_key: assignment.slot_key,
           role: assignment.role,
           worker_id: new Types.ObjectId(assignment.worker_id),
           worker_name: worker.name,
@@ -342,76 +381,48 @@ export class SchedulesService {
   }
 
   private validateServiceStructure(
-    assignments: Pick<ScheduleAssignmentDto, 'role'>[],
-    serviceType: ServiceType,
+    assignments: ScheduleAssignmentDto[],
+    serviceType: any,
   ) {
-    if (serviceType !== ServiceType.Main) {
-      const unsupportedRoles = assignments
-        .map((assignment) => assignment.role)
-        .filter((role) => {
-          return !(
-            this.nonMainAllowedRoles.has(role) ||
-            (serviceType === ServiceType.Midweek && role === WorkerRole.Keyboard)
-          );
-        });
-
-      if (unsupportedRoles.length) {
-        throw new BadRequestException(
-          `Non-main schedules only support Leader, Acoustic, Bass, and Drums/Beatbox assignments; Midweek also supports Keyboard`,
-        );
-      }
-    }
-
-    const assignedRoles = new Set(assignments.map((assignment) => assignment.role));
-    const missingRoles = this.getRequiredRoles(serviceType).filter(
-      (role) => !assignedRoles.has(role),
+    const slots = [...serviceType.assignment_slots].sort(
+      (a, b) => a.display_order - b.display_order,
     );
+    const usedSlotKeys = new Set<string>();
+    const resolved = assignments.map((assignment) => {
+      const slot = assignment.slot_key
+        ? slots.find((item) => item.key === assignment.slot_key)
+        : slots.find(
+            (item) =>
+              !usedSlotKeys.has(item.key) &&
+              item.allowed_roles.includes(assignment.role),
+          );
 
-    if (missingRoles.length) {
-      throw new BadRequestException(
-        `Missing required roles: ${missingRoles.join(', ')}`,
-      );
-    }
-
-    if (serviceType !== ServiceType.Main) {
-      const percussionAssignments = assignments.filter(
-        ({ role }) => role === WorkerRole.Drums || role === WorkerRole.Beatbox,
-      );
-      const instrumentAssignments = assignments.filter(({ role }) => {
-        return (
-          role === WorkerRole.Acoustic ||
-          (serviceType === ServiceType.Midweek && role === WorkerRole.Keyboard)
-        );
-      });
-
-      const roleCounts = assignments.reduce<Map<WorkerRole, number>>(
-        (counts, { role }) => counts.set(role, (counts.get(role) || 0) + 1),
-        new Map(),
-      );
-
-      if (
-        roleCounts.get(WorkerRole.Leader) !== 1 ||
-        instrumentAssignments.length !== 1 ||
-        (roleCounts.get(WorkerRole.Bass) || 0) > 1 ||
-        percussionAssignments.length > 1
-      ) {
+      if (!slot || !slot.allowed_roles.includes(assignment.role)) {
         throw new BadRequestException(
-          serviceType === ServiceType.Midweek
-            ? 'Midweek schedules require one Leader and one Acoustic/Keyboard assignment, with optional Bass and Drums/Beatbox assignments'
-            : 'Non-main schedules require one Leader and one Acoustic, with optional Bass and Drums/Beatbox assignments',
+          `${assignment.role} is not supported by ${serviceType.name}`,
         );
       }
-    }
-  }
 
-  private getRequiredRoles(serviceType: ServiceType) {
-    if (serviceType === ServiceType.Main) {
-      return this.mainRequiredRoles;
+      if (usedSlotKeys.has(slot.key)) {
+        throw new BadRequestException(
+          `Assignment slot "${slot.label}" can only be filled once`,
+        );
+      }
+
+      usedSlotKeys.add(slot.key);
+      return { ...assignment, slot_key: slot.key };
+    });
+    const missingSlots = slots
+      .filter((slot) => slot.required && !usedSlotKeys.has(slot.key))
+      .map((slot) => slot.label);
+
+    if (missingSlots.length) {
+      throw new BadRequestException(
+        `Missing required assignments: ${missingSlots.join(', ')}`,
+      );
     }
 
-    return serviceType === ServiceType.Midweek
-      ? [WorkerRole.Leader]
-      : this.nonMainRequiredRoles;
+    return resolved;
   }
 
   private validateNoDuplicateWorkers(assignments: ScheduleAssignmentDto[]) {
@@ -440,6 +451,34 @@ export class SchedulesService {
     if (hasUnsupportedDuplicate) {
       throw new BadRequestException(
         'A worker cannot be assigned to multiple roles in the same schedule, except Leader/Acoustic or Backup/Acoustic',
+      );
+    }
+  }
+
+  private isWorkerEligible(
+    workerGroupIds: string[],
+    eligibility: {
+      mode: WorkerEligibilityMode;
+      allowed_group_ids?: unknown[];
+    },
+  ) {
+    if (eligibility.mode === WorkerEligibilityMode.Any) {
+      return true;
+    }
+
+    const allowedIds = new Set(
+      (eligibility.allowed_group_ids ?? []).map(String),
+    );
+    return workerGroupIds.some((id) => allowedIds.has(String(id)));
+  }
+
+  private validateRecurrenceDate(date: Date, serviceType: any) {
+    if (
+      serviceType.recurrence.type === 'weekly' &&
+      date.getUTCDay() !== serviceType.recurrence.weekday
+    ) {
+      throw new BadRequestException(
+        `${serviceType.name} schedules must be assigned on the configured weekday`,
       );
     }
   }

@@ -2,7 +2,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { BaseRepository } from 'src/common/base/base.repository';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
-import { ServiceType } from 'src/common/enums/service-type.enum';
 import { Schedule, ScheduleDocument } from '../schemas/schedules.schema';
 
 export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
@@ -26,7 +25,7 @@ export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
     return await this.scheduleModel.findOne(query).lean().exec();
   }
 
-  async findSchedulesInDateRange(startDate: Date, endDate: Date, serviceType?: ServiceType) {
+  async findSchedulesInDateRange(startDate: Date, endDate: Date, serviceType?: string) {
     const query: any = {
       date: {
         $gte: startDate,
@@ -41,12 +40,15 @@ export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
     return await this.scheduleModel.find(query).sort({ date: 'asc' }).lean().exec();
   }
 
-  async findScheduleOnDate(date: Date, serviceType: ServiceType) {
+  async findScheduleOnDate(date: Date, serviceType: string, excludeId?: string) {
+    const query: any = { date, service_type: serviceType };
+
+    if (excludeId) {
+      query._id = { $ne: new Types.ObjectId(excludeId) };
+    }
+
     return await this.scheduleModel
-      .findOne({
-        date,
-        service_type: serviceType,
-      })
+      .findOne(query)
       .lean()
       .exec();
   }

@@ -6,6 +6,8 @@ import { WorkerStatus } from 'src/common/enums/worker-status.enum';
 import { WorkersService } from 'src/workers/workers.service';
 import { SchedulesRepository } from './repositories/schedules.repository';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
+import { ServiceTypesService } from 'src/service-types/service-types.service';
+import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
 
 describe('ScheduleAutoGenerationService', () => {
   let service: ScheduleAutoGenerationService;
@@ -14,6 +16,10 @@ describe('ScheduleAutoGenerationService', () => {
   };
   const workersService = {
     getWorkers: jest.fn(),
+    getWorkerGroupIds: jest.fn(),
+  };
+  const serviceTypesService = {
+    getByCode: jest.fn(),
   };
 
   const workers = [
@@ -41,6 +47,7 @@ describe('ScheduleAutoGenerationService', () => {
         ScheduleAutoGenerationService,
         { provide: SchedulesRepository, useValue: repository },
         { provide: WorkersService, useValue: workersService },
+        { provide: ServiceTypesService, useValue: serviceTypesService },
       ],
     }).compile();
 
@@ -49,6 +56,12 @@ describe('ScheduleAutoGenerationService', () => {
     );
     jest.clearAllMocks();
     workersService.getWorkers.mockResolvedValue({ items: workers });
+    workersService.getWorkerGroupIds.mockImplementation(async (item) => [
+      item.label === WorkerLabel.Youth ? 'youth-group' : 'main-group',
+    ]);
+    serviceTypesService.getByCode.mockImplementation(async (code: string) =>
+      getServiceTypeConfiguration(code),
+    );
     repository.findSchedulesInDateRange.mockImplementation(
       async (_start, _end, serviceType?: ServiceType) => {
         return serviceType ? [] : [];
@@ -242,7 +255,45 @@ describe('ScheduleAutoGenerationService', () => {
     const firstSunday = preview.rows[0];
 
     expect(firstSunday.status).toBe('needs_attention');
-    expect(firstSunday.warnings).toContain('Missing required role: Drums');
+    expect(firstSunday.warnings).toContain('Missing required assignment: Drums');
+  });
+
+  it('uses a custom service weekday and assignment slots', async () => {
+    serviceTypesService.getByCode.mockResolvedValue({
+      code: 'prayer-night',
+      name: 'Prayer Night',
+      recurrence: { type: 'weekly', weekday: 5 },
+      worker_eligibility: {
+        mode: WorkerEligibilityMode.Any,
+        allowed_group_ids: [],
+        preferred_group_ids: [],
+      },
+      assignment_slots: [
+        {
+          key: 'facilitator',
+          label: 'Facilitator',
+          allowed_roles: [WorkerRole.Leader],
+          required: true,
+          display_order: 10,
+        },
+      ],
+      auto_generation_enabled: true,
+      is_active: true,
+    });
+
+    const preview = await service.preview({
+      year: 2026,
+      month: 8,
+      service_type: 'prayer-night',
+    });
+
+    expect(preview.rows.map((row) => row.date)).toEqual([
+      '2026-08-07',
+      '2026-08-14',
+      '2026-08-21',
+      '2026-08-28',
+    ]);
+    expect(preview.rows[0].assignments[0].slot_key).toBe('facilitator');
   });
 
   function worker(
@@ -263,5 +314,92 @@ describe('ScheduleAutoGenerationService', () => {
 
   function getWorkerName(assignments, role: WorkerRole) {
     return assignments.find((assignment) => assignment.role === role)?.worker_name;
+  }
+
+  function getServiceTypeConfiguration(code: string) {
+    const groupEligibility = (allowed: string[], preferred = allowed) => ({
+      mode: WorkerEligibilityMode.Groups,
+      allowed_group_ids: allowed,
+      preferred_group_ids: preferred,
+    });
+    const anyEligibility = {
+      mode: WorkerEligibilityMode.Any,
+      allowed_group_ids: [],
+      preferred_group_ids: [],
+    };
+    const slot = (
+      key: string,
+      label: string,
+      allowed_roles: WorkerRole[],
+      required: boolean,
+      display_order: number,
+      worker_eligibility_override?: any,
+    ) => ({
+      key,
+      label,
+      allowed_roles,
+      required,
+      display_order,
+      ...(worker_eligibility_override ? { worker_eligibility_override } : {}),
+    });
+    const weekday = code === ServiceType.Youth
+      ? 6
+      : code === ServiceType.Midweek
+        ? 3
+        : 0;
+    const main = code === ServiceType.Main;
+
+    return {
+      code,
+      name: `${code} service`,
+      recurrence: { type: 'weekly', weekday },
+      worker_eligibility: main
+        ? groupEligibility(['main-group'])
+        : anyEligibility,
+      assignment_slots: main
+        ? [
+            slot('leader', 'Leader', [WorkerRole.Leader], true, 10),
+            slot(
+              'backup',
+              'Backup',
+              [WorkerRole.Backup],
+              false,
+              20,
+              groupEligibility(
+                ['main-group', 'youth-group'],
+                ['main-group'],
+              ),
+            ),
+            slot('acoustic', 'Acoustic', [WorkerRole.Acoustic], true, 30),
+            slot('electric', 'Electric', [WorkerRole.Electric], false, 40),
+            slot('bass', 'Bass', [WorkerRole.Bass], true, 50),
+            slot('keyboard', 'Keyboard', [WorkerRole.Keyboard], false, 60),
+            slot('drums', 'Drums', [WorkerRole.Drums], true, 70),
+          ]
+        : [
+            slot('leader', 'Leader', [WorkerRole.Leader], true, 10),
+            slot(
+              'instrument',
+              code === ServiceType.Midweek
+                ? 'Acoustic / Keyboard'
+                : 'Acoustic',
+              code === ServiceType.Midweek
+                ? [WorkerRole.Acoustic, WorkerRole.Keyboard]
+                : [WorkerRole.Acoustic],
+              true,
+              20,
+            ),
+            slot('bass', 'Bass', [WorkerRole.Bass], false, 30),
+            slot(
+              'percussion',
+              'Drums / Beatbox',
+              [WorkerRole.Drums, WorkerRole.Beatbox],
+              false,
+              40,
+            ),
+          ],
+      auto_generation_enabled: true,
+      is_active: true,
+    };
   }
 });

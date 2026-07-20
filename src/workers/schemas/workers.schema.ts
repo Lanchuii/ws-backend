@@ -4,6 +4,7 @@ import { WorkerLabel } from 'src/common/enums/worker-label.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
 import { User } from 'src/users/schemas/users.schema';
+import { WorkerGroup } from 'src/worker-groups/schemas/worker-groups.schema';
 
 export type WorkerDocument = Worker & Document;
 
@@ -29,6 +30,13 @@ export class Worker {
 
   @Prop({ type: String, enum: Object.values(WorkerLabel), default: WorkerLabel.Main })
   label!: WorkerLabel;
+
+  @Prop({
+    type: [MongooseSchema.Types.ObjectId],
+    ref: WorkerGroup.name,
+    default: [],
+  })
+  worker_group_ids!: Types.ObjectId[];
 
   @Prop({ type: String, enum: Object.values(WorkerStatus), default: WorkerStatus.Active })
   status!: WorkerStatus;

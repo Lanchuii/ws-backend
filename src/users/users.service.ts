@@ -18,7 +18,8 @@ export class UsersService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    await this.ensureBootstrapAdmin();
+    await this.usersRepository.markLegacyUsersVerified();
+    await this.ensureBootstrapSuperAdmin();
   }
 
   async createUser(dto: CreateUserDto) {
@@ -31,6 +32,7 @@ export class UsersService implements OnModuleInit {
       password_hash,
       role: dto.role || UserRole.Member,
       is_active: dto.is_active ?? true,
+      is_verified: dto.is_verified ?? true,
     } as any);
 
     return this.toPublicUser(user);
@@ -43,6 +45,11 @@ export class UsersService implements OnModuleInit {
       ...records,
       items: records.items.map((user) => this.toPublicUser(user)),
     };
+  }
+
+  async getLinkableUsers() {
+    const users = await this.usersRepository.getLinkableUsers();
+    return users.map((user) => this.toPublicUser(user));
   }
 
   async findById(id: string) {
@@ -71,6 +78,8 @@ export class UsersService implements OnModuleInit {
   }
 
   async updateUser(id: string, dto: UpdateUserDto) {
+    await this.ensureSuperAdminContinuity(id, dto);
+
     if (dto.email) {
       const existing = await this.usersRepository.findByEmail(dto.email);
 
@@ -100,8 +109,26 @@ export class UsersService implements OnModuleInit {
   }
 
   async updateUserRole(id: string, role: UserRole) {
+    await this.ensureSuperAdminContinuity(id, { role });
+
     const user = await this.usersRepository.updateRecord({ _id: id } as any, {
       role,
+    } as any);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return this.toPublicUser(user);
+  }
+
+  async updateUserVerification(id: string, isVerified: boolean) {
+    await this.ensureSuperAdminContinuity(id, {
+      is_verified: isVerified,
+    });
+
+    const user = await this.usersRepository.updateRecord({ _id: id } as any, {
+      is_verified: isVerified,
     } as any);
 
     if (!user) {
@@ -117,7 +144,10 @@ export class UsersService implements OnModuleInit {
     }
 
     const { password_hash, ...publicUser } = user;
-    return publicUser;
+    return {
+      ...publicUser,
+      is_verified: publicUser.is_verified !== false,
+    };
   }
 
   private async ensureEmailIsAvailable(email: string) {
@@ -128,10 +158,24 @@ export class UsersService implements OnModuleInit {
     }
   }
 
-  private async ensureBootstrapAdmin() {
-    const adminCount = await this.usersRepository.countAdmins();
+  private async ensureBootstrapSuperAdmin() {
+    const superAdminCount = await this.usersRepository.countSuperAdmins();
 
-    if (adminCount > 0) {
+    if (superAdminCount > 0) {
+      return;
+    }
+
+    const oldestAdmin = await this.usersRepository.findOldestAdmin();
+
+    if (oldestAdmin) {
+      await this.usersRepository.updateRecord(
+        { _id: oldestAdmin._id } as any,
+        {
+          role: UserRole.SuperAdmin,
+          is_active: true,
+          is_verified: true,
+        } as any,
+      );
       return;
     }
 
@@ -139,6 +183,9 @@ export class UsersService implements OnModuleInit {
     const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
 
     if (!email || !password) {
+      console.warn(
+        'No super admin exists. Configure BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD.',
+      );
       return;
     }
 
@@ -146,8 +193,46 @@ export class UsersService implements OnModuleInit {
       email,
       password,
       username: process.env.BOOTSTRAP_ADMIN_USERNAME || 'admin',
-      role: UserRole.Admin,
+      role: UserRole.SuperAdmin,
       is_active: true,
+      is_verified: true,
     });
+  }
+
+  private async ensureSuperAdminContinuity(
+    id: string,
+    changes: {
+      role?: UserRole;
+      is_active?: boolean;
+      is_verified?: boolean;
+    },
+  ) {
+    const user = await this.findById(id);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const isCurrentlyUsableSuperAdmin =
+      user.role === UserRole.SuperAdmin &&
+      user.is_active &&
+      user.is_verified !== false;
+    const remainsUsableSuperAdmin =
+      (changes.role ?? user.role) === UserRole.SuperAdmin &&
+      (changes.is_active ?? user.is_active) &&
+      (changes.is_verified ?? (user.is_verified !== false));
+
+    if (!isCurrentlyUsableSuperAdmin || remainsUsableSuperAdmin) {
+      return;
+    }
+
+    const usableSuperAdminCount =
+      await this.usersRepository.countUsableSuperAdmins();
+
+    if (usableSuperAdminCount <= 1) {
+      throw new ConflictException(
+        'At least one active, verified super admin is required',
+      );
+    }
   }
 }

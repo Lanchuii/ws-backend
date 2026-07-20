@@ -24,6 +24,11 @@ export class UpdateWorkerDto {
   label?: WorkerLabel;
 
   @IsOptional()
+  @IsArray()
+  @IsMongoId({ each: true })
+  worker_group_ids?: string[];
+
+  @IsOptional()
   @IsEnum(WorkerStatus)
   status?: WorkerStatus;
 

@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PasswordService } from 'src/common/security/password.service';
 import { UserRole } from 'src/common/enums/user-role.enum';
@@ -18,7 +22,7 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.usersService.findByLogin(dto.login);
 
-    if (!user || !user.is_active) {
+    if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -31,6 +35,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (!user.is_active) {
+      throw new ForbiddenException('Account is inactive');
+    }
+
+    if (user.is_verified === false) {
+      throw new ForbiddenException('Account is pending verification');
+    }
+
     return this.issueTokens(user);
   }
 
@@ -39,9 +51,13 @@ export class AuthService {
       ...dto,
       role: UserRole.Member,
       is_active: true,
+      is_verified: false,
     });
 
-    return this.issueTokens(user);
+    return {
+      user,
+      verificationRequired: true,
+    };
   }
 
   async refresh(dto: RefreshTokenDto) {
@@ -56,7 +72,7 @@ export class AuthService {
 
       const user = await this.usersService.findById(payload.sub);
 
-      if (!user || !user.is_active) {
+      if (!user || !user.is_active || user.is_verified === false) {
         throw new UnauthorizedException('Invalid refresh token');
       }
 
