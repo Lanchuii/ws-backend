@@ -15,6 +15,22 @@ export class WorkersRepository extends BaseRepository<WorkerDocument> {
     return await this.workerModel.findOne({ user_id: userId }).lean().exec();
   }
 
+  async findWithLegacyLeaderSongs() {
+    return await this.workerModel
+      .find({ 'leader_songs.0': { $exists: true } })
+      .lean()
+      .exec();
+  }
+
+  async clearLegacyLeaderSongs(workerId: string) {
+    return await this.workerModel
+      .updateOne(
+        { _id: workerId },
+        { $unset: { leader_songs: 1 } },
+      )
+      .exec();
+  }
+
   async backfillLegacyWorkerGroups(mainGroupId: string, youthGroupId: string) {
     const missingGroups = {
       $or: [

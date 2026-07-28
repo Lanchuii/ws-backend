@@ -61,7 +61,9 @@ export class SchedulesService {
         _id: worker._id,
         name: worker.name,
         roles: worker.roles,
-        leader_songs: worker.leader_songs || [],
+        leader_songs: await this.workersService.getLegacyLeaderSongsForWorker(
+          worker._id.toString(),
+        ),
       },
       items,
     };

@@ -4,6 +4,8 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { WorkersController } from './workers.controller';
 import { WorkersService } from './workers.service';
+import { ROLES_KEY } from 'src/auth/decorators/roles.decorator';
+import { UserRole } from 'src/common/enums/user-role.enum';
 
 describe('WorkersController', () => {
   let controller: WorkersController;
@@ -34,5 +36,23 @@ describe('WorkersController', () => {
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
+  });
+
+  it('restricts worker-targeted repertoire changes to admins', () => {
+    expect(
+      Reflect.getMetadata(ROLES_KEY, controller.addToWorkerRepertoire),
+    ).toEqual([UserRole.Admin]);
+    expect(
+      Reflect.getMetadata(ROLES_KEY, controller.updateWorkerRepertoireKey),
+    ).toEqual([UserRole.Admin]);
+    expect(
+      Reflect.getMetadata(ROLES_KEY, controller.removeFromWorkerRepertoire),
+    ).toEqual([UserRole.Admin]);
+  });
+
+  it('keeps linked-user repertoire changes on the self-service routes', () => {
+    expect(
+      Reflect.getMetadata(ROLES_KEY, controller.addToMyRepertoire),
+    ).toBeUndefined();
   });
 });

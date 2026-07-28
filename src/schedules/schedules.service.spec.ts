@@ -37,6 +37,7 @@ describe('SchedulesService', () => {
     getWorkerById: jest.fn(),
     findWorkerByUserId: jest.fn(),
     getWorkerGroupIds: jest.fn(),
+    getLegacyLeaderSongsForWorker: jest.fn(),
   };
   const scheduleAutoGenerationService = {
     preview: jest.fn(),
@@ -69,6 +70,7 @@ describe('SchedulesService', () => {
     scheduleAutoGenerationService.isGenerationDate.mockReturnValue(true);
     workersService.findWorkerByUserId.mockResolvedValue(null);
     workersService.getWorkerGroupIds.mockResolvedValue([]);
+    workersService.getLegacyLeaderSongsForWorker.mockResolvedValue([]);
     serviceTypesService.getByCode.mockImplementation(async (code: string) => {
       return getServiceTypeConfiguration(code);
     });

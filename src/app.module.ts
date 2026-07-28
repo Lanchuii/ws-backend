@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { WorkerGroupsModule } from './worker-groups/worker-groups.module';
 import { ServiceTypesModule } from './service-types/service-types.module';
+import { SongsModule } from './songs/songs.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ServiceTypesModule } from './service-types/service-types.module';
     WorkersModule,
     WorkerGroupsModule,
     ServiceTypesModule,
+    SongsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
