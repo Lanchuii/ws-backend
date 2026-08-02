@@ -10,6 +10,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { WorkerGroupsModule } from './worker-groups/worker-groups.module';
 import { ServiceTypesModule } from './service-types/service-types.module';
 import { SongsModule } from './songs/songs.module';
+import { WorkerRequestsModule } from './worker-requests/worker-requests.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { SongsModule } from './songs/songs.module';
     WorkerGroupsModule,
     ServiceTypesModule,
     SongsModule,
+    WorkerRequestsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

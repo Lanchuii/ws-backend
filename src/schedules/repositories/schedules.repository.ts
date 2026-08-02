@@ -1,5 +1,5 @@
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { ClientSession, Model, Types } from 'mongoose';
 import { BaseRepository } from 'src/common/base/base.repository';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
 import { Schedule, ScheduleDocument } from '../schemas/schedules.schema';
@@ -12,17 +12,26 @@ export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
     super(scheduleModel);
   }
 
-  async findWorkerConflictOnDate(date: Date, workerIds: Types.ObjectId[], excludeId?: string) {
+  async findWorkerConflictOnDate(
+    date: Date,
+    workerIds: Types.ObjectId[],
+    excludeIds?: string | string[],
+    session?: ClientSession,
+  ) {
     const query: any = {
       date,
       'assignments.worker_id': { $in: workerIds },
     };
 
-    if (excludeId) {
-      query._id = { $ne: new Types.ObjectId(excludeId) };
+    if (excludeIds) {
+      const ids = (Array.isArray(excludeIds) ? excludeIds : [excludeIds])
+        .map((id) => new Types.ObjectId(id));
+      query._id = { $nin: ids };
     }
 
-    return await this.scheduleModel.findOne(query).lean().exec();
+    const result = this.scheduleModel.findOne(query).lean();
+    if (session) result.session(session);
+    return await result.exec();
   }
 
   async findSchedulesInDateRange(startDate: Date, endDate: Date, serviceType?: string) {
@@ -62,6 +71,44 @@ export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
       .sort({ date: 'asc', service_type: 'asc' })
       .lean()
       .exec();
+  }
+
+  async findWorkerAssignmentsOnDate(
+    workerId: string,
+    date: Date,
+    session?: ClientSession,
+  ) {
+    const result = this.scheduleModel.find({
+      date,
+      'assignments.worker_id': new Types.ObjectId(workerId),
+    }).sort({ service_type: 'asc' }).lean();
+    if (session) result.session(session);
+    return await result.exec();
+  }
+
+  async findActiveSchedulesFromDate(date: Date) {
+    return await this.scheduleModel.find({
+      date: { $gte: date },
+      status: ScheduleStatus.Active,
+    }).sort({ date: 'asc', service_type: 'asc' }).lean().exec();
+  }
+
+  async getById(id: string, session?: ClientSession) {
+    const result = this.scheduleModel.findById(id).lean();
+    if (session) result.session(session);
+    return await result.exec();
+  }
+
+  async updateAssignments(
+    id: string,
+    assignments: unknown[],
+    session: ClientSession,
+  ) {
+    return await this.scheduleModel.findByIdAndUpdate(
+      id,
+      { $set: { assignments } },
+      { new: true, session },
+    ).lean().exec();
   }
 
   async markSchedulesInactiveThroughDate(date: Date) {

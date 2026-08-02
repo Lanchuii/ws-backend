@@ -8,6 +8,7 @@ import { AuthModule } from 'src/auth/auth.module';
 import { WorkersModule } from 'src/workers/workers.module';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
 import { ServiceTypesModule } from 'src/service-types/service-types.module';
+import { WorkerUnavailabilityModule } from 'src/worker-unavailability/worker-unavailability.module';
 
 @Module({
   imports: [
@@ -17,8 +18,10 @@ import { ServiceTypesModule } from 'src/service-types/service-types.module';
     AuthModule,
     WorkersModule,
     ServiceTypesModule,
+    WorkerUnavailabilityModule,
   ],
   providers: [SchedulesService, ScheduleAutoGenerationService, SchedulesRepository],
-  controllers: [SchedulesController]
+  controllers: [SchedulesController],
+  exports: [SchedulesService],
 })
 export class SchedulesModule {}

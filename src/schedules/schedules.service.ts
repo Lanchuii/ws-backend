@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { Types } from 'mongoose';
+import { ClientSession, Types } from 'mongoose';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
@@ -20,6 +20,26 @@ import { ScheduleAutoGenerationService } from './schedule-auto-generation.servic
 import { SchedulesRepository } from './repositories/schedules.repository';
 import { ServiceTypesService } from 'src/service-types/service-types.service';
 import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
+import { WorkerUnavailabilityService } from 'src/worker-unavailability/worker-unavailability.service';
+import { SwapMode } from 'src/common/enums/swap-mode.enum';
+
+export interface ScheduleAssignmentSnapshot {
+  schedule_id: string;
+  schedule_date: Date;
+  service_type: string;
+  slot_key: string;
+  role: WorkerRole;
+  worker_id: string;
+  worker_name: string;
+}
+
+export interface PreparedScheduleSwap {
+  source_snapshot: ScheduleAssignmentSnapshot;
+  target_snapshot?: ScheduleAssignmentSnapshot;
+  replacement_worker?: { _id: string; name: string };
+  source_update: { schedule_id: string; assignments: any[] };
+  target_update?: { schedule_id: string; assignments: any[] };
+}
 
 @Injectable()
 export class SchedulesService {
@@ -28,6 +48,7 @@ export class SchedulesService {
     private readonly workersService: WorkersService,
     private readonly scheduleAutoGenerationService: ScheduleAutoGenerationService,
     private readonly serviceTypesService: ServiceTypesService,
+    private readonly workerUnavailabilityService: WorkerUnavailabilityService,
   ) {}
 
   async getAllSchedules(query: any = {}) {
@@ -222,15 +243,20 @@ export class SchedulesService {
     }
     const update: any = { ...dto, date };
 
-    if (dto.assignments) {
+    if (dto.assignments || dto.date || dto.service_type) {
+      const assignments = dto.assignments ?? existing.assignments.map(
+        (assignment) => ({
+          slot_key: assignment.slot_key,
+          role: assignment.role,
+          worker_id: assignment.worker_id.toString(),
+        }),
+      );
       update.assignments = await this.validateAndBuildAssignments(
-        dto.assignments,
+        assignments,
         date,
         serviceType,
         id,
       );
-    } else if (dto.service_type) {
-      this.validateServiceStructure(existing.assignments as any, serviceType);
     }
 
     const schedule = await this.schedulesRepository.updateRecord(
@@ -294,6 +320,250 @@ export class SchedulesService {
     return result;
   }
 
+  async getSwapOptions(
+    requesterWorkerId: string,
+    mode: SwapMode,
+    sourceScheduleId: string,
+    sourceSlotKey: string,
+  ) {
+    const source = await this.getRequestableAssignment(
+      requesterWorkerId,
+      sourceScheduleId,
+      sourceSlotKey,
+    );
+
+    if (mode === SwapMode.Replacement) {
+      const workers = await this.workersService.getWorkers(WorkerStatus.Active);
+      const options: Array<{ worker_id: string; worker_name: string }> = [];
+
+      for (const worker of workers.items as any[]) {
+        const workerId = worker._id.toString();
+        if (workerId === requesterWorkerId) continue;
+
+        try {
+          await this.prepareSwap(
+            requesterWorkerId,
+            mode,
+            sourceScheduleId,
+            sourceSlotKey,
+            workerId,
+          );
+          options.push({ worker_id: workerId, worker_name: worker.name });
+        } catch (error) {
+          if (!(error instanceof BadRequestException)) throw error;
+        }
+      }
+
+      return { source: source.snapshot, options };
+    }
+
+    const schedules = await this.schedulesRepository.findActiveSchedulesFromDate(
+      this.getCurrentLocalDate(),
+    );
+    const options: ScheduleAssignmentSnapshot[] = [];
+
+    for (const schedule of schedules as any[]) {
+      for (const assignment of schedule.assignments ?? []) {
+        const workerId = assignment.worker_id.toString();
+        if (workerId === requesterWorkerId) continue;
+
+        try {
+          const prepared = await this.prepareSwap(
+            requesterWorkerId,
+            mode,
+            sourceScheduleId,
+            sourceSlotKey,
+            undefined,
+            schedule._id.toString(),
+            assignment.slot_key,
+          );
+          if (prepared.target_snapshot) options.push(prepared.target_snapshot);
+        } catch (error) {
+          if (!(error instanceof BadRequestException)) throw error;
+        }
+      }
+    }
+
+    return { source: source.snapshot, options };
+  }
+
+  async prepareSwap(
+    requesterWorkerId: string,
+    mode: SwapMode,
+    sourceScheduleId: string,
+    sourceSlotKey: string,
+    targetWorkerId?: string,
+    targetScheduleId?: string,
+    targetSlotKey?: string,
+    session?: ClientSession,
+  ): Promise<PreparedScheduleSwap> {
+    const source = await this.getRequestableAssignment(
+      requesterWorkerId,
+      sourceScheduleId,
+      sourceSlotKey,
+      session,
+    );
+    const excludedScheduleIds = [sourceScheduleId];
+
+    if (mode === SwapMode.Replacement) {
+      if (!targetWorkerId || targetWorkerId === requesterWorkerId) {
+        throw new BadRequestException('Select a different replacement worker');
+      }
+
+      const sourceAssignments = this.replaceAssignmentWorker(
+        source.schedule.assignments,
+        sourceSlotKey,
+        targetWorkerId,
+      );
+      const serviceType = await this.serviceTypesService.getByCode(
+        source.schedule.service_type,
+        true,
+      );
+      const assignments = await this.validateAndBuildAssignments(
+        sourceAssignments,
+        source.schedule.date,
+        serviceType,
+        excludedScheduleIds,
+        session,
+      );
+      const replacement = await this.workersService.getWorkerById(targetWorkerId);
+
+      return {
+        source_snapshot: source.snapshot,
+        replacement_worker: {
+          _id: replacement._id.toString(),
+          name: replacement.name,
+        },
+        source_update: { schedule_id: sourceScheduleId, assignments },
+      };
+    }
+
+    if (!targetScheduleId || !targetSlotKey) {
+      throw new BadRequestException('Select an assignment to exchange');
+    }
+
+    const targetSchedule = targetScheduleId === sourceScheduleId
+      ? source.schedule
+      : await this.getRequestableSchedule(targetScheduleId, session);
+    const targetAssignment = this.findAssignment(targetSchedule, targetSlotKey);
+    const targetWorkerIdValue = targetAssignment.worker_id.toString();
+
+    if (targetWorkerIdValue === requesterWorkerId) {
+      throw new BadRequestException('Select another worker assignment');
+    }
+
+    const targetSnapshot = this.toSnapshot(targetSchedule, targetAssignment);
+
+    if (targetScheduleId === sourceScheduleId) {
+      if (targetSlotKey === sourceSlotKey) {
+        throw new BadRequestException('Select a different assignment');
+      }
+      const projected = this.swapWorkersInAssignments(
+        source.schedule.assignments,
+        sourceSlotKey,
+        targetSlotKey,
+      );
+      const serviceType = await this.serviceTypesService.getByCode(
+        source.schedule.service_type,
+        true,
+      );
+      const assignments = await this.validateAndBuildAssignments(
+        projected,
+        source.schedule.date,
+        serviceType,
+        excludedScheduleIds,
+        session,
+      );
+
+      return {
+        source_snapshot: source.snapshot,
+        target_snapshot: targetSnapshot,
+        source_update: { schedule_id: sourceScheduleId, assignments },
+      };
+    }
+
+    excludedScheduleIds.push(targetScheduleId);
+    const projectedSource = this.replaceAssignmentWorker(
+      source.schedule.assignments,
+      sourceSlotKey,
+      targetWorkerIdValue,
+    );
+    const projectedTarget = this.replaceAssignmentWorker(
+      targetSchedule.assignments,
+      targetSlotKey,
+      requesterWorkerId,
+    );
+    const [sourceServiceType, targetServiceType] = await Promise.all([
+      this.serviceTypesService.getByCode(source.schedule.service_type, true),
+      this.serviceTypesService.getByCode(targetSchedule.service_type, true),
+    ]);
+    const [sourceAssignments, targetAssignments] = await Promise.all([
+      this.validateAndBuildAssignments(
+        projectedSource,
+        source.schedule.date,
+        sourceServiceType,
+        excludedScheduleIds,
+        session,
+      ),
+      this.validateAndBuildAssignments(
+        projectedTarget,
+        targetSchedule.date,
+        targetServiceType,
+        excludedScheduleIds,
+        session,
+      ),
+    ]);
+
+    if (
+      source.schedule.date.getTime() === targetSchedule.date.getTime() &&
+      this.haveCrossScheduleDuplicate(sourceAssignments, targetAssignments)
+    ) {
+      throw new BadRequestException(
+        'A worker cannot serve in multiple schedules on the same date',
+      );
+    }
+
+    return {
+      source_snapshot: source.snapshot,
+      target_snapshot: targetSnapshot,
+      source_update: { schedule_id: sourceScheduleId, assignments: sourceAssignments },
+      target_update: { schedule_id: targetScheduleId, assignments: targetAssignments },
+    };
+  }
+
+  async executePreparedSwap(prepared: PreparedScheduleSwap, session: ClientSession) {
+    const source = await this.schedulesRepository.updateAssignments(
+      prepared.source_update.schedule_id,
+      prepared.source_update.assignments,
+      session,
+    );
+    const target = prepared.target_update
+      ? await this.schedulesRepository.updateAssignments(
+          prepared.target_update.schedule_id,
+          prepared.target_update.assignments,
+          session,
+        )
+      : undefined;
+
+    if (!source || (prepared.target_update && !target)) {
+      throw new NotFoundException('A schedule changed before the swap was saved');
+    }
+
+    return { source, target };
+  }
+
+  async getWorkerAssignmentsOnDate(
+    workerId: string,
+    date: Date,
+    session?: ClientSession,
+  ) {
+    return await this.schedulesRepository.findWorkerAssignmentsOnDate(
+      workerId,
+      date,
+      session,
+    );
+  }
+
   @Cron('0 0 * * 1', {
     timeZone: process.env.CHURCH_TIMEZONE || 'Asia/Singapore',
   })
@@ -309,11 +579,104 @@ export class SchedulesService {
     );
   }
 
+  private async getRequestableAssignment(
+    workerId: string,
+    scheduleId: string,
+    slotKey: string,
+    session?: ClientSession,
+  ) {
+    const schedule = await this.getRequestableSchedule(scheduleId, session);
+    const assignment = this.findAssignment(schedule, slotKey);
+
+    if (assignment.worker_id.toString() !== workerId) {
+      throw new ForbiddenException(
+        'You can only request a swap for your own assignment',
+      );
+    }
+
+    return { schedule, assignment, snapshot: this.toSnapshot(schedule, assignment) };
+  }
+
+  private async getRequestableSchedule(id: string, session?: ClientSession) {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Schedule not found');
+    const schedule = await this.schedulesRepository.getById(id, session);
+
+    if (!schedule) throw new NotFoundException('Schedule not found');
+    if (
+      schedule.status !== ScheduleStatus.Active ||
+      schedule.date < this.getCurrentLocalDate()
+    ) {
+      throw new BadRequestException('Only current or future active assignments can be swapped');
+    }
+
+    return schedule as any;
+  }
+
+  private findAssignment(schedule: any, slotKey: string) {
+    const assignment = schedule.assignments?.find(
+      (item) => item.slot_key === slotKey,
+    );
+    if (!assignment) throw new BadRequestException('Schedule assignment not found');
+    return assignment;
+  }
+
+  private toSnapshot(schedule: any, assignment: any): ScheduleAssignmentSnapshot {
+    return {
+      schedule_id: schedule._id.toString(),
+      schedule_date: schedule.date,
+      service_type: schedule.service_type,
+      slot_key: assignment.slot_key,
+      role: assignment.role,
+      worker_id: assignment.worker_id.toString(),
+      worker_name: assignment.worker_name,
+    };
+  }
+
+  private replaceAssignmentWorker(
+    assignments: any[],
+    slotKey: string,
+    workerId: string,
+  ): ScheduleAssignmentDto[] {
+    return assignments.map((assignment) => ({
+      slot_key: assignment.slot_key,
+      role: assignment.role,
+      worker_id:
+        assignment.slot_key === slotKey
+          ? workerId
+          : assignment.worker_id.toString(),
+    }));
+  }
+
+  private swapWorkersInAssignments(
+    assignments: any[],
+    sourceSlotKey: string,
+    targetSlotKey: string,
+  ) {
+    const source = this.findAssignment({ assignments }, sourceSlotKey);
+    const target = this.findAssignment({ assignments }, targetSlotKey);
+
+    return assignments.map((assignment) => ({
+      slot_key: assignment.slot_key,
+      role: assignment.role,
+      worker_id: assignment.slot_key === sourceSlotKey
+        ? target.worker_id.toString()
+        : assignment.slot_key === targetSlotKey
+          ? source.worker_id.toString()
+          : assignment.worker_id.toString(),
+    }));
+  }
+
+  private haveCrossScheduleDuplicate(first: any[], second: any[]) {
+    const firstWorkerIds = new Set(first.map((assignment) => assignment.worker_id.toString()));
+    return second.some((assignment) => firstWorkerIds.has(assignment.worker_id.toString()));
+  }
+
   private async validateAndBuildAssignments(
     assignments: ScheduleAssignmentDto[],
     date: Date,
     serviceType: any,
-    excludeScheduleId?: string,
+    excludeScheduleIds?: string | string[],
+    session?: ClientSession,
   ) {
     if (!assignments?.length) {
       throw new BadRequestException('At least one assignment is required');
@@ -331,7 +694,8 @@ export class SchedulesService {
     const conflict = await this.schedulesRepository.findWorkerConflictOnDate(
       date,
       workerIds,
-      excludeScheduleId,
+      excludeScheduleIds,
+      session,
     );
 
     if (conflict) {
@@ -339,6 +703,12 @@ export class SchedulesService {
         'A worker is already assigned to another schedule on this date',
       );
     }
+
+    await this.workerUnavailabilityService.assertWorkersAvailable(
+      workerIds.map(String),
+      date,
+      session,
+    );
 
     return await Promise.all(
       slottedAssignments.map(async (assignment) => {

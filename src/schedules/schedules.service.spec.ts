@@ -11,6 +11,7 @@ import { ScheduleAutoGenerationService } from './schedule-auto-generation.servic
 import { SchedulesService } from './schedules.service';
 import { ServiceTypesService } from 'src/service-types/service-types.service';
 import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
+import { WorkerUnavailabilityService } from 'src/worker-unavailability/worker-unavailability.service';
 
 describe('SchedulesService', () => {
   let service: SchedulesService;
@@ -46,6 +47,9 @@ describe('SchedulesService', () => {
   const serviceTypesService = {
     getByCode: jest.fn(),
   };
+  const workerUnavailabilityService = {
+    assertWorkersAvailable: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -58,6 +62,10 @@ describe('SchedulesService', () => {
           useValue: scheduleAutoGenerationService,
         },
         { provide: ServiceTypesService, useValue: serviceTypesService },
+        {
+          provide: WorkerUnavailabilityService,
+          useValue: workerUnavailabilityService,
+        },
       ],
     }).compile();
 
@@ -74,6 +82,7 @@ describe('SchedulesService', () => {
     serviceTypesService.getByCode.mockImplementation(async (code: string) => {
       return getServiceTypeConfiguration(code);
     });
+    workerUnavailabilityService.assertWorkersAvailable.mockResolvedValue(undefined);
     workersService.getWorkerById.mockImplementation(async (id: string) => {
       const workers = {
         [leaderId]: {
@@ -255,6 +264,7 @@ describe('SchedulesService', () => {
     expect(schedule.lineup).toBe('https://open.spotify.com/playlist/example');
     expect(schedule.status).toBe(ScheduleStatus.Active);
     expect(repository.insertRecord).toHaveBeenCalled();
+    expect(workerUnavailabilityService.assertWorkersAvailable).toHaveBeenCalled();
   });
 
   it('creates a non-main schedule with leader, acoustic, and beatbox roles', async () => {
@@ -312,6 +322,20 @@ describe('SchedulesService', () => {
     });
 
     expect(schedule.assignments).toHaveLength(4);
+  });
+
+  it('rejects a schedule when an assigned worker is unavailable', async () => {
+    workerUnavailabilityService.assertWorkersAvailable.mockRejectedValueOnce(
+      new Error('unavailable'),
+    );
+
+    await expect(
+      service.createSchedule({
+        date: '2026-07-19',
+        service_type: ServiceType.Main,
+        assignments: validAssignments(),
+      }),
+    ).rejects.toThrow('unavailable');
   });
 
   it('allows a backup singer to cover Acoustic in the same schedule', async () => {

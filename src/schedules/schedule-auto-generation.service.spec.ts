@@ -8,6 +8,7 @@ import { SchedulesRepository } from './repositories/schedules.repository';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
 import { ServiceTypesService } from 'src/service-types/service-types.service';
 import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
+import { WorkerUnavailabilityService } from 'src/worker-unavailability/worker-unavailability.service';
 
 describe('ScheduleAutoGenerationService', () => {
   let service: ScheduleAutoGenerationService;
@@ -20,6 +21,9 @@ describe('ScheduleAutoGenerationService', () => {
   };
   const serviceTypesService = {
     getByCode: jest.fn(),
+  };
+  const workerUnavailabilityService = {
+    getUnavailableWorkerIds: jest.fn(),
   };
 
   const workers = [
@@ -48,6 +52,10 @@ describe('ScheduleAutoGenerationService', () => {
         { provide: SchedulesRepository, useValue: repository },
         { provide: WorkersService, useValue: workersService },
         { provide: ServiceTypesService, useValue: serviceTypesService },
+        {
+          provide: WorkerUnavailabilityService,
+          useValue: workerUnavailabilityService,
+        },
       ],
     }).compile();
 
@@ -61,6 +69,9 @@ describe('ScheduleAutoGenerationService', () => {
     ]);
     serviceTypesService.getByCode.mockImplementation(async (code: string) =>
       getServiceTypeConfiguration(code),
+    );
+    workerUnavailabilityService.getUnavailableWorkerIds.mockResolvedValue(
+      new Map(),
     );
     repository.findSchedulesInDateRange.mockImplementation(
       async (_start, _end, serviceType?: ServiceType) => {
@@ -81,6 +92,18 @@ describe('ScheduleAutoGenerationService', () => {
     expect(preview.rows.every((row) => row.service_type === ServiceType.Main)).toBe(
       true,
     );
+  });
+
+  it('excludes workers who are unavailable on a generated date', async () => {
+    workerUnavailabilityService.getUnavailableWorkerIds.mockResolvedValue(
+      new Map([['2026-07-05', new Set(['leader-main'])]]),
+    );
+
+    const preview = await service.preview({ year: 2026, month: 7 });
+    const firstSunday = preview.rows[0];
+
+    expect(firstSunday.assignments.some((item) => item.worker_id === 'leader-main')).toBe(false);
+    expect(firstSunday.status).toBe('needs_attention');
   });
 
   it('generates Youth schedules for every Saturday', async () => {
