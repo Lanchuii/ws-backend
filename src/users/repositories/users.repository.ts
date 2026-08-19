@@ -68,6 +68,24 @@ export class UsersRepository extends BaseRepository<UserDocument> {
       .exec();
   }
 
+  async completePasswordReset(id: string, passwordHash: string) {
+    return await this.userModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            password_hash: passwordHash,
+            password_reset_required: false,
+          },
+          $inc: { token_version: 1 },
+        },
+        { new: true },
+      )
+      .select('+token_version')
+      .lean()
+      .exec();
+  }
+
   async getLinkableUsers() {
     return await this.userModel
       .find({

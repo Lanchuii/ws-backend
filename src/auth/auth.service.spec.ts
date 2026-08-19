@@ -12,6 +12,7 @@ describe('AuthService', () => {
     findByLogin: jest.fn(),
     findById: jest.fn(),
     createUser: jest.fn(),
+    completeRequiredPasswordReset: jest.fn(),
     toPublicUser: jest.fn((user) => {
       const { password_hash, ...publicUser } = user;
       return publicUser;
@@ -54,6 +55,24 @@ describe('AuthService', () => {
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBe('refresh-token');
     expect(result.user.password_hash).toBeUndefined();
+  });
+
+  it('returns a restricted session when login requires a password reset', async () => {
+    usersService.findByLogin.mockResolvedValue({
+      ...user(),
+      password_reset_required: true,
+    });
+    passwordService.verifyPassword.mockResolvedValue(true);
+    jwtService.signAsync
+      .mockResolvedValueOnce('access-token')
+      .mockResolvedValueOnce('refresh-token');
+
+    const result = await service.login({
+      login: 'admin@example.com',
+      password: 'password123',
+    });
+
+    expect(result.user.password_reset_required).toBe(true);
   });
 
   it('rejects invalid login', async () => {
@@ -137,6 +156,47 @@ describe('AuthService', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('rejects refresh tokens issued before a password reset', async () => {
+    jwtService.verifyAsync.mockResolvedValue({
+      sub: 'user-id',
+      type: 'refresh',
+      token_version: 0,
+    });
+    usersService.findById.mockResolvedValue({
+      ...user(),
+      token_version: 1,
+    });
+
+    await expect(
+      service.refresh({ refreshToken: 'old-refresh-token' }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('resets the password and issues rotated tokens', async () => {
+    usersService.completeRequiredPasswordReset.mockResolvedValue({
+      ...user(),
+      password_reset_required: false,
+      token_version: 1,
+    });
+    jwtService.signAsync
+      .mockResolvedValueOnce('new-access-token')
+      .mockResolvedValueOnce('new-refresh-token');
+
+    const result = await service.resetPassword('user-id', {
+      password: 'new-password',
+    });
+
+    expect(usersService.completeRequiredPasswordReset).toHaveBeenCalledWith(
+      'user-id',
+      'new-password',
+    );
+    expect(result.user.password_reset_required).toBe(false);
+    expect(jwtService.signAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ token_version: 1, type: 'access' }),
+      expect.any(Object),
+    );
+  });
+
   function user() {
     return {
       _id: 'user-id',
@@ -146,6 +206,8 @@ describe('AuthService', () => {
       role: UserRole.Admin,
       is_active: true,
       is_verified: true,
+      password_reset_required: false,
+      token_version: 0,
     };
   }
 });

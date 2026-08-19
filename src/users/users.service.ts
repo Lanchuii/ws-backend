@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -33,6 +34,8 @@ export class UsersService implements OnModuleInit {
       role: dto.role || UserRole.Member,
       is_active: dto.is_active ?? true,
       is_verified: dto.is_verified ?? true,
+      password_reset_required: false,
+      token_version: 0,
     } as any);
 
     return this.toPublicUser(user);
@@ -142,15 +145,53 @@ export class UsersService implements OnModuleInit {
     return this.toPublicUser(user);
   }
 
+  async updatePasswordResetRequirement(id: string, required: boolean) {
+    const user = await this.usersRepository.updateRecord({ _id: id } as any, {
+      password_reset_required: required,
+    } as any);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return this.toPublicUser(user);
+  }
+
+  async completeRequiredPasswordReset(id: string, password: string) {
+    const user = await this.findById(id);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.password_reset_required) {
+      throw new BadRequestException('Password reset is not required');
+    }
+
+    const passwordHash = await this.passwordService.hashPassword(password);
+    const updated = await this.usersRepository.completePasswordReset(
+      id,
+      passwordHash,
+    );
+
+    if (!updated) {
+      throw new NotFoundException('User not found');
+    }
+
+    return updated;
+  }
+
   toPublicUser(user: any) {
     if (!user) {
       return user;
     }
 
-    const { password_hash, ...publicUser } = user;
+    const { password_hash, token_version, ...publicUser } = user;
     return {
       ...publicUser,
       is_verified: publicUser.is_verified !== false,
+      password_reset_required:
+        publicUser.password_reset_required === true,
     };
   }
 

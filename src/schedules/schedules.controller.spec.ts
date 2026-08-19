@@ -4,6 +4,7 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { SchedulesController } from './schedules.controller';
 import { SchedulesService } from './schedules.service';
+import { UsersService } from 'src/users/users.service';
 
 describe('SchedulesController', () => {
   let controller: SchedulesController;
@@ -15,6 +16,7 @@ describe('SchedulesController', () => {
       providers: [
         JwtAuthGuard,
         RolesGuard,
+        { provide: UsersService, useValue: { findById: jest.fn() } },
         {
           provide: SchedulesService,
           useValue: {

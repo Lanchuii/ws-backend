@@ -276,6 +276,93 @@ describe('PushNotificationsService', () => {
     expect(result).toEqual({ sent: 1, failed: 0, expired: 0 });
   });
 
+  it('notifies retained, removed, and newly assigned workers after a schedule edit', async () => {
+    const retainedWorkerId = new Types.ObjectId().toString();
+    const removedWorkerId = new Types.ObjectId().toString();
+    const addedWorkerId = new Types.ObjectId().toString();
+    const retainedUserId = new Types.ObjectId().toString();
+    const removedUserId = new Types.ObjectId().toString();
+    const addedUserId = new Types.ObjectId().toString();
+    const scheduleId = new Types.ObjectId();
+    workersService.findWorkersByIds.mockResolvedValue([
+      { _id: retainedWorkerId, user_id: retainedUserId },
+      { _id: removedWorkerId, user_id: removedUserId },
+      { _id: addedWorkerId, user_id: addedUserId },
+    ]);
+    usersService.findById.mockImplementation(async (id: string) => ({
+      _id: id,
+      is_active: true,
+      is_verified: true,
+    }));
+    webPushClient.isConfigured.mockReturnValue(false);
+
+    const result = await service.notifyScheduleModified(
+      {
+        _id: scheduleId,
+        date: new Date('2026-09-06T00:00:00.000Z'),
+        service_type: 'main',
+        notes: 'Before',
+        assignments: [
+          { worker_id: retainedWorkerId, role: 'Leader' },
+          { worker_id: removedWorkerId, role: 'Backup' },
+        ],
+      },
+      {
+        _id: scheduleId,
+        date: new Date('2026-09-06T00:00:00.000Z'),
+        service_type: 'main',
+        notes: 'After',
+        assignments: [
+          { worker_id: retainedWorkerId, role: 'Leader' },
+          { worker_id: addedWorkerId, role: 'Acoustic' },
+        ],
+      },
+    );
+
+    const notifications = inboxRepository.upsertMany.mock.calls.flatMap(
+      ([records]) => records,
+    );
+    expect(notifications).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        userId: retainedUserId,
+        type: NotificationType.ScheduleUpdated,
+        title: 'Schedule updated',
+        metadata: expect.objectContaining({ changeType: 'schedule_updated' }),
+      }),
+      expect.objectContaining({
+        userId: removedUserId,
+        title: 'Schedule assignment removed',
+        metadata: expect.objectContaining({ changeType: 'removed' }),
+      }),
+      expect.objectContaining({
+        userId: addedUserId,
+        title: 'Added to schedule',
+        metadata: expect.objectContaining({ changeType: 'assigned' }),
+      }),
+    ]));
+    expect(result).toEqual({
+      notified: 3,
+      sent: 0,
+      failed: 0,
+      expired: 0,
+    });
+  });
+
+  it('does not notify workers when a schedule save has no changes', async () => {
+    const schedule = {
+      _id: new Types.ObjectId(),
+      date: new Date('2026-09-06T00:00:00.000Z'),
+      service_type: 'main',
+      assignments: [{ worker_id: workerId, role: 'Leader' }],
+    };
+
+    await expect(
+      service.notifyScheduleModified(schedule, schedule),
+    ).resolves.toEqual({ notified: 0, sent: 0, failed: 0, expired: 0 });
+    expect(workersService.findWorkersByIds).not.toHaveBeenCalled();
+    expect(inboxRepository.upsertMany).not.toHaveBeenCalled();
+  });
+
   it('deletes only the authenticated user subscription', async () => {
     repository.deleteForUser.mockResolvedValue({ deletedCount: 1 });
 

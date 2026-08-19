@@ -6,6 +6,7 @@ import { WorkersController } from './workers.controller';
 import { WorkersService } from './workers.service';
 import { ROLES_KEY } from 'src/auth/decorators/roles.decorator';
 import { UserRole } from 'src/common/enums/user-role.enum';
+import { UsersService } from 'src/users/users.service';
 
 describe('WorkersController', () => {
   let controller: WorkersController;
@@ -17,6 +18,7 @@ describe('WorkersController', () => {
       providers: [
         JwtAuthGuard,
         RolesGuard,
+        { provide: UsersService, useValue: { findById: jest.fn() } },
         {
           provide: WorkersService,
           useValue: {

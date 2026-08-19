@@ -90,6 +90,23 @@ interface LineupNotificationRecord {
   assignments?: Array<{ worker_id: Types.ObjectId | string }>;
 }
 
+interface ScheduleModificationRecord extends LineupNotificationRecord {
+  status?: string;
+  notes?: string;
+  lineup?: string;
+  songs?: Array<{
+    song_id?: Types.ObjectId | string;
+    title?: string;
+    artist?: string;
+    key?: string;
+  }>;
+  assignments?: Array<{
+    slot_key?: string;
+    worker_id: Types.ObjectId | string;
+    role: string;
+  }>;
+}
+
 @Injectable()
 export class PushNotificationsService {
   private readonly logger = new Logger(PushNotificationsService.name);
@@ -418,6 +435,88 @@ export class PushNotificationsService {
     );
   }
 
+  async notifyScheduleModified(
+    previous: ScheduleModificationRecord,
+    current: ScheduleModificationRecord,
+  ) {
+    if (
+      this.getScheduleNotificationSnapshot(previous) ===
+      this.getScheduleNotificationSnapshot(current)
+    ) {
+      return { notified: 0, sent: 0, failed: 0, expired: 0 };
+    }
+
+    const previousRoles = this.getRolesByWorker(previous.assignments ?? []);
+    const currentRoles = this.getRolesByWorker(current.assignments ?? []);
+    const workerIds = [...new Set([
+      ...previousRoles.keys(),
+      ...currentRoles.keys(),
+    ])];
+    const recipients = await this.getActiveLinkedUsers(workerIds);
+    const scheduleId = current._id.toString();
+    const date = new Date(current.date);
+    const dateKey = date.toISOString().slice(0, 10);
+    const formattedDate = new Intl.DateTimeFormat('en-PH', {
+      month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+    }).format(date);
+    const formattedPreviousDate = new Intl.DateTimeFormat('en-PH', {
+      month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+    }).format(new Date(previous.date));
+    const serviceName = this.formatServiceType(current.service_type);
+    const previousServiceName = this.formatServiceType(previous.service_type);
+    const result = { notified: recipients.length, sent: 0, failed: 0, expired: 0 };
+    const eventId = new Types.ObjectId().toString();
+
+    for (const recipient of recipients) {
+      const before = previousRoles.get(recipient.workerId) ?? [];
+      const after = currentRoles.get(recipient.workerId) ?? [];
+      const changeType = !before.length
+        ? 'assigned'
+        : !after.length
+          ? 'removed'
+          : this.haveSameRoles(before, after)
+            ? 'schedule_updated'
+            : 'assignment_updated';
+      const payload: PushPayload = {
+        title: changeType === 'assigned'
+          ? 'Added to schedule'
+          : changeType === 'removed'
+            ? 'Schedule assignment removed'
+            : 'Schedule updated',
+        body: this.getScheduleModificationBody(
+          changeType,
+          after,
+          changeType === 'removed' ? previousServiceName : serviceName,
+          changeType === 'removed' ? formattedPreviousDate : formattedDate,
+        ),
+        icon: '/icons/icon-192.png',
+        badge: '/icons/badge-96.png',
+        tag: `schedule-updated-${scheduleId}-${eventId}-${recipient.userId}`,
+        data: {
+          url: `/calendar?date=${dateKey}&scheduleId=${scheduleId}`,
+          notificationType: NotificationType.ScheduleUpdated,
+        },
+      };
+      const delivery = await this.storeAndSend(
+        [recipient.userId],
+        NotificationType.ScheduleUpdated,
+        payload,
+        {
+          scheduleId,
+          date: dateKey,
+          serviceType: current.service_type,
+          workerId: recipient.workerId,
+          changeType,
+        },
+      );
+      result.sent += delivery.sent;
+      result.failed += delivery.failed;
+      result.expired += delivery.expired;
+    }
+
+    return result;
+  }
+
   async notifyRequestReviewed(request: WorkerRequestNotificationRecord) {
     if (
       request.status !== WorkerRequestStatus.Approved &&
@@ -626,6 +725,87 @@ export class PushNotificationsService {
     }
 
     return grouped;
+  }
+
+  private async getActiveLinkedUsers(workerIds: string[]) {
+    const workers = await this.workersService.findWorkersByIds(workerIds);
+    const recipients: Array<{ workerId: string; userId: string }> = [];
+
+    for (const worker of workers as unknown as LinkedWorkerRecord[]) {
+      if (!worker.user_id) continue;
+      const user = await this.usersService.findById(worker.user_id.toString());
+      if (user?.is_active && user.is_verified !== false) {
+        recipients.push({
+          workerId: worker._id.toString(),
+          userId: user._id.toString(),
+        });
+      }
+    }
+
+    return recipients;
+  }
+
+  private getRolesByWorker(
+    assignments: Array<{
+      worker_id: Types.ObjectId | string;
+      role: string;
+    }>,
+  ) {
+    const roles = new Map<string, string[]>();
+    for (const assignment of assignments) {
+      const workerId = assignment.worker_id.toString();
+      const workerRoles = roles.get(workerId) ?? [];
+      workerRoles.push(assignment.role);
+      roles.set(workerId, workerRoles);
+    }
+    return roles;
+  }
+
+  private haveSameRoles(first: string[], second: string[]) {
+    return [...first].sort().join('|') === [...second].sort().join('|');
+  }
+
+  private getScheduleModificationBody(
+    changeType: string,
+    roles: string[],
+    serviceName: string,
+    formattedDate: string,
+  ) {
+    if (changeType === 'assigned') {
+      return `You were assigned as ${roles.join(', ')} for ${serviceName} on ${formattedDate}.`;
+    }
+    if (changeType === 'removed') {
+      return `You are no longer assigned to ${serviceName} on ${formattedDate}.`;
+    }
+    if (changeType === 'assignment_updated') {
+      return `Your ${serviceName} assignment for ${formattedDate} was updated to ${roles.join(', ')}.`;
+    }
+    return `The ${serviceName} schedule for ${formattedDate} was updated. Please review the latest details.`;
+  }
+
+  private getScheduleNotificationSnapshot(schedule: ScheduleModificationRecord) {
+    const assignments = (schedule.assignments ?? [])
+      .map((assignment) => ({
+        slot_key: assignment.slot_key ?? '',
+        role: assignment.role,
+        worker_id: assignment.worker_id.toString(),
+      }))
+      .sort((first, second) => JSON.stringify(first).localeCompare(JSON.stringify(second)));
+    const songs = (schedule.songs ?? []).map((song) => ({
+      song_id: song.song_id?.toString() ?? '',
+      title: song.title ?? '',
+      artist: song.artist ?? '',
+      key: song.key ?? '',
+    }));
+    return JSON.stringify({
+      date: new Date(schedule.date).toISOString(),
+      service_type: schedule.service_type,
+      status: schedule.status ?? '',
+      notes: schedule.notes ?? '',
+      lineup: schedule.lineup ?? '',
+      assignments,
+      songs,
+    });
   }
 
   private async getWeeklyReminderRecipients(weekStart: Date) {

@@ -18,6 +18,7 @@ describe('UsersService', () => {
     getRecords: jest.fn(),
     getRecordById: jest.fn(),
     updateRecord: jest.fn(),
+    completePasswordReset: jest.fn(),
     getLinkableUsers: jest.fn(),
   };
   const passwordService = {
@@ -153,5 +154,52 @@ describe('UsersService', () => {
     const user = await service.updateUserVerification('member-id', true);
 
     expect(user.is_verified).toBe(true);
+  });
+
+  it('lets a super admin mark an account for a required password reset', async () => {
+    repository.updateRecord.mockResolvedValue({
+      _id: 'member-id',
+      email: 'member@example.com',
+      password_hash: 'hash',
+      password_reset_required: true,
+    });
+
+    const user = await service.updatePasswordResetRequirement(
+      'member-id',
+      true,
+    );
+
+    expect(repository.updateRecord).toHaveBeenCalledWith(
+      { _id: 'member-id' },
+      { password_reset_required: true },
+    );
+    expect(user.password_reset_required).toBe(true);
+    expect(user.password_hash).toBeUndefined();
+  });
+
+  it('hashes the new password, clears the requirement, and rotates tokens', async () => {
+    repository.getRecordById.mockResolvedValue({
+      _id: 'member-id',
+      password_reset_required: true,
+    });
+    repository.completePasswordReset.mockResolvedValue({
+      _id: 'member-id',
+      password_hash: 'new-password-hash',
+      password_reset_required: false,
+      token_version: 2,
+    });
+    passwordService.hashPassword.mockResolvedValue('new-password-hash');
+
+    const user = await service.completeRequiredPasswordReset(
+      'member-id',
+      'new-password',
+    );
+
+    expect(passwordService.hashPassword).toHaveBeenCalledWith('new-password');
+    expect(repository.completePasswordReset).toHaveBeenCalledWith(
+      'member-id',
+      'new-password-hash',
+    );
+    expect(user.token_version).toBe(2);
   });
 });

@@ -23,6 +23,12 @@ export class User {
 
   @Prop({ default: false })
   is_verified!: boolean;
+
+  @Prop({ default: false })
+  password_reset_required!: boolean;
+
+  @Prop({ default: 0 })
+  token_version!: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

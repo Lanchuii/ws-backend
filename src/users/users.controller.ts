@@ -7,6 +7,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserVerificationDto } from './dto/update-user-verification.dto';
+import { UpdatePasswordResetRequirementDto } from './dto/update-password-reset-requirement.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -54,6 +55,17 @@ export class UsersController {
     return await this.usersService.updateUserVerification(
       id,
       dto.is_verified,
+    );
+  }
+
+  @Patch(':id/password-reset')
+  async updatePasswordResetRequirement(
+    @Param('id') id: string,
+    @Body() dto: UpdatePasswordResetRequirementDto,
+  ) {
+    return await this.usersService.updatePasswordResetRequirement(
+      id,
+      dto.required,
     );
   }
 }

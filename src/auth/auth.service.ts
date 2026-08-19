@@ -9,6 +9,7 @@ import { UserRole } from 'src/common/enums/user-role.enum';
 import { UsersService } from 'src/users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SignupDto } from './dto/signup.dto';
 
 @Injectable()
@@ -76,10 +77,25 @@ export class AuthService {
         throw new UnauthorizedException('Invalid refresh token');
       }
 
+      if (
+        Number(payload.token_version ?? 0) !==
+        Number(user.token_version ?? 0)
+      ) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
       return this.issueTokens(user);
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+  }
+
+  async resetPassword(userId: string, dto: ResetPasswordDto) {
+    const user = await this.usersService.completeRequiredPasswordReset(
+      userId,
+      dto.password,
+    );
+    return await this.issueTokens(user);
   }
 
   private async issueTokens(user: any) {
@@ -88,6 +104,7 @@ export class AuthService {
       email: user.email,
       username: user.username,
       role: user.role,
+      token_version: Number(user.token_version ?? 0),
     };
 
     const [accessToken, refreshToken] = await Promise.all([

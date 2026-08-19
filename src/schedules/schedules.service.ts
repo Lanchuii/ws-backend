@@ -279,6 +279,20 @@ export class SchedulesService {
       throw new NotFoundException('Schedule not found');
     }
 
+    if (this.pushNotificationsService) {
+      try {
+        await this.pushNotificationsService.notifyScheduleModified(
+          existing as any,
+          schedule as any,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Could not notify affected workers for schedule ${id}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
     return schedule;
   }
 

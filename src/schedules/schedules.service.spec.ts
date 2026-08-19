@@ -12,6 +12,7 @@ import { SchedulesService } from './schedules.service';
 import { ServiceTypesService } from 'src/service-types/service-types.service';
 import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
 import { WorkerUnavailabilityService } from 'src/worker-unavailability/worker-unavailability.service';
+import { PushNotificationsService } from 'src/push-notifications/push-notifications.service';
 
 describe('SchedulesService', () => {
   let service: SchedulesService;
@@ -52,6 +53,10 @@ describe('SchedulesService', () => {
   const workerUnavailabilityService = {
     assertWorkersAvailable: jest.fn(),
   };
+  const pushNotificationsService = {
+    notifyLineupPublished: jest.fn(),
+    notifyScheduleModified: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -67,6 +72,10 @@ describe('SchedulesService', () => {
         {
           provide: WorkerUnavailabilityService,
           useValue: workerUnavailabilityService,
+        },
+        {
+          provide: PushNotificationsService,
+          useValue: pushNotificationsService,
         },
       ],
     }).compile();
@@ -85,6 +94,8 @@ describe('SchedulesService', () => {
       return getServiceTypeConfiguration(code);
     });
     workerUnavailabilityService.assertWorkersAvailable.mockResolvedValue(undefined);
+    pushNotificationsService.notifyLineupPublished.mockResolvedValue(undefined);
+    pushNotificationsService.notifyScheduleModified.mockResolvedValue(undefined);
     workersService.getWorkerById.mockImplementation(async (id: string) => {
       const workers = {
         [leaderId]: {
@@ -340,6 +351,29 @@ describe('SchedulesService', () => {
       { song_id: songId.toString(), key: 'G' },
     );
     expect(workersService.findWorkerByUserId).not.toHaveBeenCalled();
+  });
+
+  it('notifies affected workers after an admin modifies a schedule', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    const existing = {
+      _id: scheduleId,
+      date: new Date('2099-07-12T00:00:00.000Z'),
+      service_type: ServiceType.Main,
+      notes: 'Old notes',
+      assignments: [],
+    };
+    const updated = { ...existing, notes: 'Updated notes' };
+    repository.getRecordById.mockResolvedValue(existing);
+    repository.updateRecord.mockResolvedValue(updated);
+
+    await service.updateScheduleById(scheduleId, {
+      notes: 'Updated notes',
+    });
+
+    expect(pushNotificationsService.notifyScheduleModified).toHaveBeenCalledWith(
+      existing,
+      updated,
+    );
   });
 
   it('creates a schedule when required roles are present', async () => {
