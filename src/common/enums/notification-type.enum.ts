@@ -4,6 +4,7 @@ export enum NotificationType {
   RequestCreated = 'request_created',
   RequestApproved = 'request_approved',
   RequestDenied = 'request_denied',
+  PasswordResetRequested = 'password_reset_requested',
   SwapActionRequired = 'swap_action_required',
   SwapAccepted = 'swap_accepted',
   SwapDeclined = 'swap_declined',

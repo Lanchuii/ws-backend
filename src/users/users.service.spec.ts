@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { PasswordService } from 'src/common/security/password.service';
+import { AppEventsService } from 'src/common/events/app-events.service';
 import { UsersRepository } from './repositories/users.repository';
 import { UsersService } from './users.service';
 
@@ -28,6 +29,9 @@ describe('UsersService', () => {
   const passwordService = {
     hashPassword: jest.fn(),
   };
+  const appEvents = {
+    emitPasswordResetRequested: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -35,6 +39,7 @@ describe('UsersService', () => {
         UsersService,
         { provide: UsersRepository, useValue: repository },
         { provide: PasswordService, useValue: passwordService },
+        { provide: AppEventsService, useValue: appEvents },
       ],
     }).compile();
 
@@ -170,6 +175,24 @@ describe('UsersService', () => {
     const result = await service.requestPasswordReset(' member ');
 
     expect(repository.requestPasswordReset).toHaveBeenCalledWith('member');
+    expect(
+      appEvents.emitPasswordResetRequested,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'member-id', username: 'member' }),
+    );
+    expect(result.message).toContain(
+      'If an eligible account matches that username',
+    );
+  });
+
+  it('does not notify super admins when no new reset request is created', async () => {
+    repository.requestPasswordReset.mockResolvedValue(null);
+
+    const result = await service.requestPasswordReset('unknown');
+
+    expect(
+      appEvents.emitPasswordResetRequested,
+    ).not.toHaveBeenCalled();
     expect(result.message).toContain(
       'If an eligible account matches that username',
     );

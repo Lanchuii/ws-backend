@@ -5,6 +5,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
+import { AppEventsService } from 'src/common/events/app-events.service';
 import { PasswordService } from 'src/common/security/password.service';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -16,6 +17,7 @@ export class UsersService implements OnModuleInit {
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly passwordService: PasswordService,
+    private readonly appEvents: AppEventsService,
   ) {}
 
   async onModuleInit() {
@@ -85,7 +87,18 @@ export class UsersService implements OnModuleInit {
   }
 
   async requestPasswordReset(username: string) {
-    await this.usersRepository.requestPasswordReset(username.trim());
+    const request = await this.usersRepository.requestPasswordReset(
+      username.trim(),
+    );
+
+    if (request) {
+      this.appEvents.emitPasswordResetRequested({
+        _id: request._id,
+        username: request.username,
+        password_reset_requested_at:
+          request.password_reset_requested_at as Date,
+      });
+    }
 
     return {
       message:

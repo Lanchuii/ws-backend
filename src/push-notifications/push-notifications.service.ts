@@ -4,11 +4,18 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
   ServiceUnavailableException,
   forwardRef,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Types } from 'mongoose';
+import { Subscription } from 'rxjs';
+import {
+  AppEventsService,
+  PasswordResetRequestedEvent,
+} from 'src/common/events/app-events.service';
 import { NotificationType } from 'src/common/enums/notification-type.enum';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
@@ -108,8 +115,9 @@ interface ScheduleModificationRecord extends LineupNotificationRecord {
 }
 
 @Injectable()
-export class PushNotificationsService {
+export class PushNotificationsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PushNotificationsService.name);
+  private passwordResetRequestedSubscription?: Subscription;
 
   constructor(
     private readonly repository: PushSubscriptionsRepository,
@@ -119,7 +127,24 @@ export class PushNotificationsService {
     private readonly workersService: WorkersService,
     private readonly usersService: UsersService,
     private readonly inboxRepository: NotificationInboxRepository,
+    private readonly appEvents: AppEventsService,
   ) {}
+
+  onModuleInit() {
+    this.passwordResetRequestedSubscription =
+      this.appEvents.passwordResetRequested$.subscribe((request) => {
+        void this.notifyPasswordResetRequested(request).catch((error) => {
+          this.logger.error(
+            `Could not notify super admins of password reset request ${request._id}`,
+            error instanceof Error ? error.stack : undefined,
+          );
+        });
+      });
+  }
+
+  onModuleDestroy() {
+    this.passwordResetRequestedSubscription?.unsubscribe();
+  }
 
   getPublicKey() {
     const publicKey = this.webPushClient.getPublicKey();
@@ -319,6 +344,34 @@ export class PushNotificationsService {
     }
 
     return await this.sendToUsers(adminIds, payload);
+  }
+
+  async notifyPasswordResetRequested(request: PasswordResetRequestedEvent) {
+    const superAdmins = await this.usersService.findActiveByRoles([
+      UserRole.SuperAdmin,
+    ]);
+    const recipientIds = superAdmins.map((admin) => admin._id.toString());
+    const userId = request._id.toString();
+    const requestedAt = new Date(request.password_reset_requested_at);
+    const payload: PushPayload = {
+      title: 'Password reset requested',
+      body: `${request.username || 'A user'} requested a password reset.`,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
+      tag: `password-reset-requested-${userId}-${requestedAt.getTime()}`,
+      data: {
+        url: '/requests',
+        requestId: userId,
+        notificationType: NotificationType.PasswordResetRequested,
+      },
+    };
+
+    return await this.storeAndSend(
+      recipientIds,
+      NotificationType.PasswordResetRequested,
+      payload,
+      { userId, requestedAt: requestedAt.toISOString() },
+    );
   }
 
   async notifySwapTargetRequested(request: WorkerRequestNotificationRecord) {

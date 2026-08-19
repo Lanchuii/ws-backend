@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { SecurityModule } from 'src/common/security/security.module';
+import { AppEventsModule } from 'src/common/events/app-events.module';
 import { User, UserSchema } from './schemas/users.schema';
 import { UsersController } from './users.controller';
 import { UsersRepository } from './repositories/users.repository';
@@ -14,6 +15,7 @@ import { UsersService } from './users.service';
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     JwtModule.register({}),
     SecurityModule,
+    AppEventsModule,
   ],
   controllers: [UsersController],
   providers: [UsersService, UsersRepository, JwtAuthGuard, RolesGuard],

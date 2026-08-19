@@ -6,6 +6,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { NotificationType } from 'src/common/enums/notification-type.enum';
+import { AppEventsService } from 'src/common/events/app-events.service';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
 import { WorkerRequestType } from 'src/common/enums/worker-request-type.enum';
@@ -52,6 +53,11 @@ describe('PushNotificationsService', () => {
     markRead: jest.fn(),
     markAllRead: jest.fn(),
   };
+  const appEvents = {
+    passwordResetRequested$: {
+      subscribe: jest.fn(),
+    },
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -63,6 +69,7 @@ describe('PushNotificationsService', () => {
         { provide: WorkersService, useValue: workersService },
         { provide: UsersService, useValue: usersService },
         { provide: NotificationInboxRepository, useValue: inboxRepository },
+        { provide: AppEventsService, useValue: appEvents },
       ],
     }).compile();
 
@@ -273,6 +280,67 @@ describe('PushNotificationsService', () => {
       'Admin note: The replacement is unavailable.',
     );
     expect(payload.data.notificationType).toBe('request_denied');
+    expect(result).toEqual({ sent: 1, failed: 0, expired: 0 });
+  });
+
+  it('notifies active super admins when a password reset is requested', async () => {
+    const superAdminId = new Types.ObjectId().toString();
+    const requestedUserId = new Types.ObjectId().toString();
+    const requestedAt = new Date('2026-08-19T10:00:00.000Z');
+    usersService.findActiveByRoles.mockResolvedValue([
+      { _id: superAdminId, role: UserRole.SuperAdmin },
+    ]);
+    repository.findForUsers.mockResolvedValue([
+      {
+        _id: subscriptionId,
+        user_id: superAdminId,
+        endpoint: 'https://push.example/super-admin',
+        p256dh: 'super-admin-key',
+        auth: 'super-admin-auth',
+      },
+    ]);
+
+    const result = await service.notifyPasswordResetRequested({
+      _id: requestedUserId,
+      username: 'member',
+      password_reset_requested_at: requestedAt,
+    });
+
+    expect(usersService.findActiveByRoles).toHaveBeenCalledWith([
+      UserRole.SuperAdmin,
+    ]);
+    expect(inboxRepository.upsertMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId: superAdminId,
+        type: NotificationType.PasswordResetRequested,
+        title: 'Password reset requested',
+        url: '/requests',
+        metadata: {
+          userId: requestedUserId,
+          requestedAt: requestedAt.toISOString(),
+        },
+      }),
+    ]);
+    const sendMock = webPushClient.send as jest.MockedFunction<
+      (
+        subscription: unknown,
+        payload: string,
+        options: unknown,
+      ) => Promise<unknown>
+    >;
+    const payload = JSON.parse(sendMock.mock.calls[0][1]) as {
+      title: string;
+      body: string;
+      data: { url: string; notificationType: string };
+    };
+    expect(payload).toMatchObject({
+      title: 'Password reset requested',
+      body: 'member requested a password reset.',
+      data: {
+        url: '/requests',
+        notificationType: 'password_reset_requested',
+      },
+    });
     expect(result).toEqual({ sent: 1, failed: 0, expired: 0 });
   });
 
