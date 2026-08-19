@@ -57,6 +57,33 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## Web push configuration
+
+Generate one VAPID key pair and keep it stable for the lifetime of existing
+browser subscriptions:
+
+```bash
+npx web-push generate-vapid-keys --json
+```
+
+Set `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, and
+`WEB_PUSH_VAPID_SUBJECT` in the backend environment. The subject must be a
+`mailto:` address or an HTTPS URL. Also set `CHURCH_TIMEZONE` and
+`CHURCH_TIMEZONE_OFFSET_MINUTES`; the defaults are `Asia/Manila` and `480`.
+`WEB_PUSH_REMINDER_CRON` defaults to `0 8 * * 1` (Monday at 8:00 AM). For local
+testing it can be set to `* * * * *`; weekly idempotency still prevents the
+same device from receiving more than one schedule reminder for that week.
+
+Subscribed workers receive schedule reminders and request approval or denial
+updates. Subscribed admins and super admins receive an alert whenever a worker
+creates a request. Request-event delivery failures are logged without rolling
+back the request workflow.
+
+All three event types are also persisted to each recipient's in-app inbox,
+whether or not Web Push is enabled. Authenticated clients use
+`GET /push-notifications/inbox`, `PATCH /push-notifications/inbox/:id/read`,
+and `PATCH /push-notifications/inbox/read-all` to display and manage it.
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.

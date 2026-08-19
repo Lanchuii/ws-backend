@@ -107,6 +107,14 @@ export class WorkersService implements OnModuleInit {
     return await this.workersRepository.findByUserId(userId);
   }
 
+  async findWorkersByIds(ids: string[]) {
+    if (!ids.length) {
+      return [];
+    }
+
+    return await this.workersRepository.findByIds(ids);
+  }
+
   async updateMyLeaderSongs(userId: string, leaderSongs: LeaderSongDto[]) {
     const worker = await this.getLinkedLeader(userId);
     await this.replaceLegacyLeaderSongs(worker._id.toString(), leaderSongs);

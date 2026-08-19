@@ -49,6 +49,17 @@ export class SchedulesRepository extends BaseRepository<ScheduleDocument> {
     return await this.scheduleModel.find(query).sort({ date: 'asc' }).lean().exec();
   }
 
+  async findActiveSchedulesInDateRange(startDate: Date, endDate: Date) {
+    return await this.scheduleModel
+      .find({
+        date: { $gte: startDate, $lt: endDate },
+        status: ScheduleStatus.Active,
+      })
+      .sort({ date: 'asc', service_type: 'asc' })
+      .lean()
+      .exec();
+  }
+
   async findScheduleOnDate(date: Date, serviceType: string, excludeId?: string) {
     const query: any = { date, service_type: serviceType };
 

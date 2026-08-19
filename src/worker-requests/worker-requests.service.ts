@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   HttpException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
@@ -11,6 +12,7 @@ import { Connection, Types } from 'mongoose';
 import { SwapMode } from 'src/common/enums/swap-mode.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
 import { WorkerRequestType } from 'src/common/enums/worker-request-type.enum';
+import { PushNotificationsService } from 'src/push-notifications/push-notifications.service';
 import {
   PreparedScheduleSwap,
   ScheduleAssignmentSnapshot,
@@ -24,11 +26,14 @@ import { WorkerRequestsRepository } from './repositories/worker-requests.reposit
 
 @Injectable()
 export class WorkerRequestsService {
+  private readonly logger = new Logger(WorkerRequestsService.name);
+
   constructor(
     @InjectConnection() private readonly connection: Connection,
     private readonly repository: WorkerRequestsRepository,
     private readonly schedulesService: SchedulesService,
     private readonly unavailabilityService: WorkerUnavailabilityService,
+    private readonly pushNotificationsService: PushNotificationsService,
   ) {}
 
   async createSwap(userId: string, dto: CreateSwapRequestDto) {
@@ -43,7 +48,7 @@ export class WorkerRequestsService {
       dto.target_slot_key,
     );
 
-    return await this.repository.create({
+    const created = await this.repository.create({
       type: WorkerRequestType.Swap,
       swap_mode: dto.mode,
       status: WorkerRequestStatus.Pending,
@@ -60,6 +65,12 @@ export class WorkerRequestsService {
       target_worker_name: prepared.replacement_worker?.name,
       reason: dto.reason?.trim(),
     });
+
+    await this.notifySafely(
+      () => this.pushNotificationsService.notifyRequestCreated(created as any),
+      `new swap request ${created._id?.toString() ?? ''}`,
+    );
+    return created;
   }
 
   async createUnavailable(userId: string, dto: CreateUnavailableRequestDto) {
@@ -82,7 +93,7 @@ export class WorkerRequestsService {
       throw new ConflictException('An unavailable request already exists for this date');
     }
 
-    return await this.repository.create({
+    const created = await this.repository.create({
       type: WorkerRequestType.Unavailable,
       status: WorkerRequestStatus.Pending,
       requester_user_id: new Types.ObjectId(userId),
@@ -91,6 +102,12 @@ export class WorkerRequestsService {
       unavailable_date: date,
       reason: dto.reason?.trim(),
     });
+
+    await this.notifySafely(
+      () => this.pushNotificationsService.notifyRequestCreated(created as any),
+      `new unavailable request ${created._id?.toString() ?? ''}`,
+    );
+    return created;
   }
 
   async getSwapOptions(userId: string, query: SwapOptionsQueryDto) {
@@ -157,6 +174,11 @@ export class WorkerRequestsService {
       reviewer_note: note?.trim(),
     });
     if (!rejected) throw new ConflictException('Request status changed');
+    await this.notifySafely(
+      () =>
+        this.pushNotificationsService.notifyRequestReviewed(rejected as any),
+      `rejected request ${id}`,
+    );
     return rejected;
   }
 
@@ -164,6 +186,7 @@ export class WorkerRequestsService {
     if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Request not found');
     const session = await this.connection.startSession();
     let result: any;
+    let shouldNotify = false;
 
     try {
       await session.withTransaction(async () => {
@@ -231,11 +254,19 @@ export class WorkerRequestsService {
           session,
         );
         if (!result) throw new ConflictException('Request status changed');
+        shouldNotify = true;
       });
-      return result;
     } finally {
       await session.endSession();
     }
+
+    if (shouldNotify) {
+      await this.notifySafely(
+        () => this.pushNotificationsService.notifyRequestReviewed(result),
+        `approved request ${id}`,
+      );
+    }
+    return result;
   }
 
   private async prepareStoredSwap(
@@ -353,6 +384,20 @@ export class WorkerRequestsService {
       localNow.getUTCMonth(),
       localNow.getUTCDate(),
     ));
+  }
+
+  private async notifySafely(
+    action: () => Promise<unknown>,
+    description: string,
+  ) {
+    try {
+      await action();
+    } catch (error) {
+      this.logger.error(
+        `Could not send notification for ${description}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 }
 

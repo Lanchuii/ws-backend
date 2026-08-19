@@ -1,5 +1,5 @@
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { BaseRepository } from 'src/common/base/base.repository';
 import { Worker, WorkerDocument } from '../schemas/workers.schema';
 
@@ -13,6 +13,13 @@ export class WorkersRepository extends BaseRepository<WorkerDocument> {
 
   async findByUserId(userId: string) {
     return await this.workerModel.findOne({ user_id: userId }).lean().exec();
+  }
+
+  async findByIds(ids: string[]) {
+    return await this.workerModel
+      .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } })
+      .lean()
+      .exec();
   }
 
   async findWithLegacyLeaderSongs() {

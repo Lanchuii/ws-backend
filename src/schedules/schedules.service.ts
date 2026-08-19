@@ -564,8 +564,15 @@ export class SchedulesService {
     );
   }
 
+  async getActiveSchedulesInDateRange(startDate: Date, endDate: Date) {
+    return await this.schedulesRepository.findActiveSchedulesInDateRange(
+      startDate,
+      endDate,
+    );
+  }
+
   @Cron('0 0 * * 1', {
-    timeZone: process.env.CHURCH_TIMEZONE || 'Asia/Singapore',
+    timeZone: process.env.CHURCH_TIMEZONE || 'Asia/Manila',
   })
   async syncPastScheduleStatuses() {
     const throughDate = this.getLastCompletedLocalDate(new Date());
