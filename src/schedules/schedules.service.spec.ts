@@ -39,6 +39,7 @@ describe('SchedulesService', () => {
     findWorkerByUserId: jest.fn(),
     getWorkerGroupIds: jest.fn(),
     getLegacyLeaderSongsForWorker: jest.fn(),
+    resolveLeaderLineupSong: jest.fn(),
   };
   const scheduleAutoGenerationService = {
     preview: jest.fn(),
@@ -228,6 +229,47 @@ describe('SchedulesService', () => {
         UserRole.Member,
       ),
     ).rejects.toThrow('assigned leader');
+  });
+
+  it('publishes ordered structured songs with a Spotify link', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    const songId = new Types.ObjectId();
+    repository.getRecordById.mockResolvedValue({
+      _id: scheduleId,
+      date: new Date('2099-09-06T00:00:00.000Z'),
+      status: ScheduleStatus.Active,
+      songs: [],
+      assignments: [{
+        role: WorkerRole.Leader,
+        worker_id: new Types.ObjectId(leaderId),
+      }],
+    });
+    workersService.findWorkerByUserId.mockResolvedValue({
+      _id: new Types.ObjectId(leaderId),
+    });
+    workersService.resolveLeaderLineupSong.mockResolvedValue({
+      song_id: songId,
+      title: 'Grace',
+      artist: 'Team',
+      key: 'G',
+    });
+    repository.updateRecord.mockImplementation(async (_filter, update) => ({
+      _id: scheduleId,
+      ...update,
+    }));
+
+    const result = await service.updateScheduleLineup(
+      scheduleId,
+      {
+        songs: [{ song_id: songId.toString(), key: 'G' }],
+        spotify_url: 'https://open.spotify.com/playlist/example',
+      },
+      'user-id',
+      UserRole.Member,
+    );
+
+    expect(result.songs[0]).toMatchObject({ title: 'Grace', key: 'G' });
+    expect(result.lineup).toBe('https://open.spotify.com/playlist/example');
   });
 
   it('allows super admins to update any schedule lineup', async () => {

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { SchedulesService } from './schedules.service';
 import { SchedulesController } from './schedules.controller';
 import { SchedulesRepository } from './repositories/schedules.repository';
@@ -9,6 +9,7 @@ import { WorkersModule } from 'src/workers/workers.module';
 import { ScheduleAutoGenerationService } from './schedule-auto-generation.service';
 import { ServiceTypesModule } from 'src/service-types/service-types.module';
 import { WorkerUnavailabilityModule } from 'src/worker-unavailability/worker-unavailability.module';
+import { PushNotificationsModule } from 'src/push-notifications/push-notifications.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { WorkerUnavailabilityModule } from 'src/worker-unavailability/worker-una
     WorkersModule,
     ServiceTypesModule,
     WorkerUnavailabilityModule,
+    forwardRef(() => PushNotificationsModule),
   ],
   providers: [SchedulesService, ScheduleAutoGenerationService, SchedulesRepository],
   controllers: [SchedulesController],

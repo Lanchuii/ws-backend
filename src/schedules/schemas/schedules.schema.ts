@@ -1,7 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { ScheduleStatus } from 'src/common/enums/schedule-status.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
+import { Song } from 'src/songs/schemas/songs.schema';
 import { Worker } from 'src/workers/schemas/workers.schema';
 
 export type ScheduleDocument = Schedule & Document;
@@ -23,8 +24,14 @@ export class ScheduleAssignment {
 
 @Schema({ _id: false })
 export class ScheduleSong {
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: Song.name })
+  song_id?: Types.ObjectId;
+
   @Prop({ required: true, trim: true })
   title!: string;
+
+  @Prop({ trim: true })
+  artist?: string;
 
   @Prop({ trim: true })
   key?: string;

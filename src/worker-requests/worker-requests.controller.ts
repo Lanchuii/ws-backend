@@ -7,6 +7,7 @@ import { UserRole } from 'src/common/enums/user-role.enum';
 import { CreateSwapRequestDto } from './dto/create-swap-request.dto';
 import { CreateUnavailableRequestDto } from './dto/create-unavailable-request.dto';
 import { ReviewWorkerRequestDto } from './dto/review-worker-request.dto';
+import { RespondSwapRequestDto } from './dto/respond-swap-request.dto';
 import { SwapOptionsQueryDto } from './dto/swap-options-query.dto';
 import { WorkerRequestsService } from './worker-requests.service';
 
@@ -50,6 +51,20 @@ export class WorkerRequestsController {
   @Patch(':id/cancel')
   cancel(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
     return this.service.cancel(id, request.user.sub);
+  }
+
+  @Patch(':id/respond')
+  respondToSwap(
+    @Param('id') id: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: RespondSwapRequestDto,
+  ) {
+    return this.service.respondToSwap(
+      id,
+      request.user.sub,
+      dto.decision,
+      dto.note,
+    );
   }
 
   @Patch(':id/approve')

@@ -13,7 +13,7 @@ export class LeaderRepertoire {
   @Prop({ type: Types.ObjectId, ref: Song.name, required: true })
   song_id!: Types.ObjectId;
 
-  @Prop({ required: true, trim: true })
+  @Prop({ trim: true, default: '' })
   key!: string;
 }
 

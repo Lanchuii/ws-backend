@@ -6,10 +6,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, Types } from 'mongoose';
 import { SwapMode } from 'src/common/enums/swap-mode.enum';
+import { SwapTargetResponse } from 'src/common/enums/swap-target-response.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
 import { WorkerRequestType } from 'src/common/enums/worker-request-type.enum';
 import { PushNotificationsService } from 'src/push-notifications/push-notifications.service';
@@ -19,13 +21,15 @@ import {
   SchedulesService,
 } from 'src/schedules/schedules.service';
 import { WorkerUnavailabilityService } from 'src/worker-unavailability/worker-unavailability.service';
+import { WorkersService } from 'src/workers/workers.service';
 import { CreateSwapRequestDto } from './dto/create-swap-request.dto';
 import { CreateUnavailableRequestDto } from './dto/create-unavailable-request.dto';
 import { SwapOptionsQueryDto } from './dto/swap-options-query.dto';
+import { SwapTargetDecision } from './dto/respond-swap-request.dto';
 import { WorkerRequestsRepository } from './repositories/worker-requests.repository';
 
 @Injectable()
-export class WorkerRequestsService {
+export class WorkerRequestsService implements OnModuleInit {
   private readonly logger = new Logger(WorkerRequestsService.name);
 
   constructor(
@@ -34,7 +38,33 @@ export class WorkerRequestsService {
     private readonly schedulesService: SchedulesService,
     private readonly unavailabilityService: WorkerUnavailabilityService,
     private readonly pushNotificationsService: PushNotificationsService,
+    private readonly workersService: WorkersService,
   ) {}
+
+  async onModuleInit() {
+    const pending = await this.repository.findLegacyPendingSwaps();
+    for (const request of pending as any[]) {
+      const workerId = request.target_worker_id?.toString() ??
+        request.target_assignment?.worker_id?.toString();
+      const target = workerId
+        ? await this.workersService.getConsentEligibleWorker(workerId)
+        : null;
+      if (target) {
+        await this.repository.updatePending(request._id.toString(), {
+          target_worker_id: new Types.ObjectId(workerId),
+          target_user_id: new Types.ObjectId(target.user._id),
+          target_worker_name: request.target_worker_name ?? target.worker.name,
+          target_response: SwapTargetResponse.Pending,
+        });
+      } else {
+        await this.repository.updatePending(request._id.toString(), {
+          status: WorkerRequestStatus.Failed,
+          failure_reason:
+            'The selected worker has no active linked account. Submit a new swap request.',
+        });
+      }
+    }
+  }
 
   async createSwap(userId: string, dto: CreateSwapRequestDto) {
     const worker = await this.unavailabilityService.requireLinkedWorker(userId);
@@ -48,6 +78,18 @@ export class WorkerRequestsService {
       dto.target_slot_key,
     );
 
+    const targetWorkerId = prepared.replacement_worker?._id ??
+      prepared.target_snapshot?.worker_id;
+    if (!targetWorkerId) {
+      throw new BadRequestException('A target worker is required');
+    }
+    const target = await this.workersService.getConsentEligibleWorker(targetWorkerId);
+    if (!target) {
+      throw new BadRequestException(
+        'The selected worker needs an active, verified linked account',
+      );
+    }
+
     const created = await this.repository.create({
       type: WorkerRequestType.Swap,
       swap_mode: dto.mode,
@@ -59,16 +101,17 @@ export class WorkerRequestsService {
       target_assignment: prepared.target_snapshot
         ? this.toStoredSnapshot(prepared.target_snapshot)
         : undefined,
-      target_worker_id: prepared.replacement_worker
-        ? new Types.ObjectId(prepared.replacement_worker._id)
-        : undefined,
-      target_worker_name: prepared.replacement_worker?.name,
+      target_worker_id: new Types.ObjectId(targetWorkerId),
+      target_user_id: new Types.ObjectId(target.user._id),
+      target_worker_name:
+        prepared.replacement_worker?.name ?? prepared.target_snapshot?.worker_name,
+      target_response: SwapTargetResponse.Pending,
       reason: dto.reason?.trim(),
     });
 
     await this.notifySafely(
-      () => this.pushNotificationsService.notifyRequestCreated(created as any),
-      `new swap request ${created._id?.toString() ?? ''}`,
+      () => this.pushNotificationsService.notifySwapTargetRequested(created as any),
+      `swap consent request ${created._id?.toString() ?? ''}`,
     );
     return created;
   }
@@ -125,6 +168,7 @@ export class WorkerRequestsService {
     const filter = this.buildFilters(query);
     filter.$or = [
       { requester_user_id: new Types.ObjectId(userId) },
+      { target_user_id: new Types.ObjectId(userId) },
       { target_worker_id: worker._id },
       { 'target_assignment.worker_id': worker._id },
     ];
@@ -160,12 +204,54 @@ export class WorkerRequestsService {
     return cancelled;
   }
 
+  async respondToSwap(
+    id: string,
+    userId: string,
+    decision: SwapTargetDecision,
+    note?: string,
+  ) {
+    const request = await this.getRequest(id);
+    if (request.type !== WorkerRequestType.Swap) {
+      throw new BadRequestException('Only swap requests need target consent');
+    }
+    if (request.target_user_id?.toString() !== userId) {
+      throw new ForbiddenException('Only the selected worker can respond');
+    }
+    if (request.status !== WorkerRequestStatus.Pending) {
+      throw new ConflictException('Only pending swaps can be answered');
+    }
+    if (
+      request.target_response &&
+      request.target_response !== SwapTargetResponse.Pending
+    ) {
+      throw new ConflictException('This swap has already been answered');
+    }
+
+    const accepted = decision === SwapTargetDecision.Accept;
+    const updated = await this.repository.updatePendingForTarget(id, userId, {
+      target_response: accepted
+        ? SwapTargetResponse.Accepted
+        : SwapTargetResponse.Declined,
+      target_responded_at: new Date(),
+      target_response_note: note?.trim(),
+      ...(accepted ? {} : { status: WorkerRequestStatus.Rejected }),
+    });
+    if (!updated) throw new ConflictException('Request status changed');
+
+    await this.notifySafely(
+      () => this.pushNotificationsService.notifySwapTargetResponded(updated as any),
+      `swap target response ${id}`,
+    );
+    return updated;
+  }
+
   async reject(id: string, reviewerId: string, note?: string) {
     const request = await this.getRequest(id);
     if (request.status === WorkerRequestStatus.Rejected) return request;
     if (request.status !== WorkerRequestStatus.Pending) {
       throw new ConflictException('Only pending requests can be rejected');
     }
+    this.assertTargetAccepted(request);
 
     const rejected = await this.repository.updatePending(id, {
       status: WorkerRequestStatus.Rejected,
@@ -199,6 +285,8 @@ export class WorkerRequestsService {
         if (request.status !== WorkerRequestStatus.Pending) {
           throw new ConflictException('Only pending requests can be approved');
         }
+
+        this.assertTargetAccepted(request);
 
         if (request.type === WorkerRequestType.Unavailable) {
           const date = request.unavailable_date!;
@@ -328,6 +416,17 @@ export class WorkerRequestsService {
       current.role === stored.role &&
       current.worker_id === stored.worker_id.toString()
     );
+  }
+
+  private assertTargetAccepted(request: any) {
+    if (
+      request.type === WorkerRequestType.Swap &&
+      request.target_response !== SwapTargetResponse.Accepted
+    ) {
+      throw new ConflictException(
+        'The selected worker must accept before admin review',
+      );
+    }
   }
 
   private toStoredSnapshot(snapshot: ScheduleAssignmentSnapshot) {

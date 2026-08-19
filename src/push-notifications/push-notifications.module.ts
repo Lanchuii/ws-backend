@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from 'src/auth/auth.module';
 import { SchedulesModule } from 'src/schedules/schedules.module';
@@ -25,7 +25,7 @@ import { WebPushClient } from './web-push.client';
       { name: NotificationInboxRecord.name, schema: NotificationInboxSchema },
     ]),
     AuthModule,
-    SchedulesModule,
+    forwardRef(() => SchedulesModule),
     WorkersModule,
     UsersModule,
   ],

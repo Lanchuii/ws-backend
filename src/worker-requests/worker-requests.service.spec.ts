@@ -1,10 +1,12 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { SwapMode } from 'src/common/enums/swap-mode.enum';
+import { SwapTargetResponse } from 'src/common/enums/swap-target-response.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
 import { WorkerRequestType } from 'src/common/enums/worker-request-type.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerRequestsService } from './worker-requests.service';
+import { SwapTargetDecision } from './dto/respond-swap-request.dto';
 
 describe('WorkerRequestsService', () => {
   const userId = new Types.ObjectId().toString();
@@ -40,6 +42,8 @@ describe('WorkerRequestsService', () => {
     list: jest.fn(),
     findById: jest.fn(),
     updatePending: jest.fn(),
+    updatePendingForTarget: jest.fn(),
+    findLegacyPendingSwaps: jest.fn(),
   };
   const schedulesService = {
     prepareSwap: jest.fn(),
@@ -55,6 +59,12 @@ describe('WorkerRequestsService', () => {
   const pushNotificationsService = {
     notifyRequestCreated: jest.fn(),
     notifyRequestReviewed: jest.fn(),
+    notifySwapTargetRequested: jest.fn(),
+    notifySwapTargetResponded: jest.fn(),
+  };
+  const targetUserId = new Types.ObjectId().toString();
+  const workersService = {
+    getConsentEligibleWorker: jest.fn(),
   };
   let service: WorkerRequestsService;
 
@@ -66,6 +76,7 @@ describe('WorkerRequestsService', () => {
       schedulesService as any,
       unavailabilityService as any,
       pushNotificationsService as any,
+      workersService as any,
     );
     unavailabilityService.requireLinkedWorker.mockResolvedValue({
       _id: new Types.ObjectId(workerId),
@@ -78,6 +89,12 @@ describe('WorkerRequestsService', () => {
     });
     pushNotificationsService.notifyRequestReviewed.mockResolvedValue({
       sent: 0,
+    });
+    pushNotificationsService.notifySwapTargetRequested.mockResolvedValue({ sent: 0 });
+    pushNotificationsService.notifySwapTargetResponded.mockResolvedValue({ sent: 0 });
+    workersService.getConsentEligibleWorker.mockResolvedValue({
+      worker: { _id: targetWorkerId, name: 'Mathew' },
+      user: { _id: targetUserId, is_active: true, is_verified: true },
     });
   });
 
@@ -104,8 +121,9 @@ describe('WorkerRequestsService', () => {
       status: WorkerRequestStatus.Pending,
       requester_worker_name: 'Joshua',
       target_worker_name: 'Mathew',
+      target_response: SwapTargetResponse.Pending,
     });
-    expect(pushNotificationsService.notifyRequestCreated).toHaveBeenCalledWith(
+    expect(pushNotificationsService.notifySwapTargetRequested).toHaveBeenCalledWith(
       expect.objectContaining({ type: WorkerRequestType.Swap }),
     );
   });
@@ -119,6 +137,34 @@ describe('WorkerRequestsService', () => {
         date: '2099-09-06',
       }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('records target acceptance without applying the swap', async () => {
+    const request = {
+      _id: new Types.ObjectId(requestId),
+      type: WorkerRequestType.Swap,
+      status: WorkerRequestStatus.Pending,
+      requester_user_id: new Types.ObjectId(userId),
+      requester_worker_name: 'Joshua',
+      target_user_id: new Types.ObjectId(targetUserId),
+      target_worker_name: 'Mathew',
+      target_response: SwapTargetResponse.Pending,
+    };
+    repository.findById.mockResolvedValue(request);
+    repository.updatePendingForTarget.mockResolvedValue({
+      ...request,
+      target_response: SwapTargetResponse.Accepted,
+    });
+
+    const result = await service.respondToSwap(
+      requestId,
+      targetUserId,
+      SwapTargetDecision.Accept,
+    );
+
+    expect(result.target_response).toBe(SwapTargetResponse.Accepted);
+    expect(schedulesService.executePreparedSwap).not.toHaveBeenCalled();
+    expect(pushNotificationsService.notifySwapTargetResponded).toHaveBeenCalled();
   });
 
   it('approves and executes a valid replacement in one transaction', async () => {
@@ -135,6 +181,7 @@ describe('WorkerRequestsService', () => {
       requester_worker_id: new Types.ObjectId(workerId),
       source_assignment: storedSnapshot,
       target_worker_id: new Types.ObjectId(targetWorkerId),
+      target_response: SwapTargetResponse.Accepted,
     };
     repository.findById.mockResolvedValue(request);
     repository.updatePending.mockResolvedValue({
@@ -218,6 +265,7 @@ describe('WorkerRequestsService', () => {
         worker_id: new Types.ObjectId(workerId),
       },
       target_worker_id: new Types.ObjectId(targetWorkerId),
+      target_response: SwapTargetResponse.Accepted,
     };
     repository.findById
       .mockResolvedValueOnce(request)

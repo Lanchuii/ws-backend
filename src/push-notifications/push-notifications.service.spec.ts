@@ -461,6 +461,39 @@ describe('PushNotificationsService', () => {
     ]);
     expect(repository.findPendingForUsers).not.toHaveBeenCalled();
   });
+
+  it('previews and manually sends to selected eligible users without weekly dedupe', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    schedulesService.getActiveSchedulesInDateRange.mockResolvedValue([{
+      _id: scheduleId,
+      date: new Date('2026-08-23T00:00:00.000Z'),
+      service_type: 'main',
+      assignments: [{ worker_id: workerId, role: 'Leader' }],
+    }]);
+    workersService.findWorkersByIds.mockResolvedValue([{
+      _id: workerId,
+      user_id: userId,
+      name: 'Joshua',
+    }]);
+
+    const preview = await service.previewScheduleReminder('2026-08-17');
+    const result = await service.sendManualScheduleReminder(
+      '2026-08-17',
+      [userId],
+      new Types.ObjectId().toString(),
+    );
+
+    expect(preview.recipients[0]).toMatchObject({ user_id: userId, worker_name: 'Joshua' });
+    expect(result.notified_users).toBe(1);
+    expect(repository.findPendingForUsers).not.toHaveBeenCalled();
+    expect(inboxRepository.upsertMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId,
+        type: NotificationType.ScheduleReminder,
+        metadata: expect.objectContaining({ manual: true }),
+      }),
+    ]);
+  });
 });
 
 const subscriptionDto = () => ({

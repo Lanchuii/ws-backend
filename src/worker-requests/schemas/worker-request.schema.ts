@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { SwapMode } from 'src/common/enums/swap-mode.enum';
+import { SwapTargetResponse } from 'src/common/enums/swap-target-response.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
 import { WorkerRequestType } from 'src/common/enums/worker-request-type.enum';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
@@ -69,8 +70,20 @@ export class WorkerRequest {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: Worker.name })
   target_worker_id?: Types.ObjectId;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: User.name })
+  target_user_id?: Types.ObjectId;
+
   @Prop({ trim: true })
   target_worker_name?: string;
+
+  @Prop({ type: String, enum: Object.values(SwapTargetResponse) })
+  target_response?: SwapTargetResponse;
+
+  @Prop()
+  target_responded_at?: Date;
+
+  @Prop({ trim: true })
+  target_response_note?: string;
 
   @Prop()
   unavailable_date?: Date;
@@ -99,3 +112,4 @@ export const WorkerRequestSchema = SchemaFactory.createForClass(WorkerRequest);
 WorkerRequestSchema.index({ status: 1, createdAt: -1 });
 WorkerRequestSchema.index({ requester_user_id: 1, createdAt: -1 });
 WorkerRequestSchema.index({ requester_worker_id: 1, status: 1 });
+WorkerRequestSchema.index({ target_user_id: 1, status: 1, createdAt: -1 });

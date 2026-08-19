@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  forwardRef,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Types } from 'mongoose';
@@ -11,6 +13,7 @@ import { NotificationType } from 'src/common/enums/notification-type.enum';
 import { UserRole } from 'src/common/enums/user-role.enum';
 import { WorkerRequestStatus } from 'src/common/enums/worker-request-status.enum';
 import { WorkerRequestType } from 'src/common/enums/worker-request-type.enum';
+import { SwapTargetResponse } from 'src/common/enums/swap-target-response.enum';
 import { SchedulesService } from 'src/schedules/schedules.service';
 import { UsersService } from 'src/users/users.service';
 import { WorkersService } from 'src/workers/workers.service';
@@ -55,6 +58,10 @@ interface WorkerRequestNotificationRecord {
   status: WorkerRequestStatus;
   requester_user_id: Types.ObjectId | string;
   requester_worker_name: string;
+  target_user_id?: Types.ObjectId | string;
+  target_worker_name?: string;
+  target_response?: SwapTargetResponse;
+  target_response_note?: string;
   unavailable_date?: Date | string;
   reviewer_note?: string;
   source_assignment?: {
@@ -76,6 +83,13 @@ interface PushPayload {
   };
 }
 
+interface LineupNotificationRecord {
+  _id: Types.ObjectId | string;
+  date: Date | string;
+  service_type: string;
+  assignments?: Array<{ worker_id: Types.ObjectId | string }>;
+}
+
 @Injectable()
 export class PushNotificationsService {
   private readonly logger = new Logger(PushNotificationsService.name);
@@ -83,6 +97,7 @@ export class PushNotificationsService {
   constructor(
     private readonly repository: PushSubscriptionsRepository,
     private readonly webPushClient: WebPushClient,
+    @Inject(forwardRef(() => SchedulesService))
     private readonly schedulesService: SchedulesService,
     private readonly workersService: WorkersService,
     private readonly usersService: UsersService,
@@ -163,6 +178,89 @@ export class PushNotificationsService {
     return await this.inboxRepository.markAllRead(userId);
   }
 
+  async previewScheduleReminder(weekStartValue: string) {
+    const weekStart = this.parseWeekStart(weekStartValue);
+    const recipients = await this.getWeeklyReminderRecipients(weekStart);
+
+    return {
+      week_start: weekStart.toISOString().slice(0, 10),
+      week_end: new Date(weekStart.getTime() + 6 * 86_400_000)
+        .toISOString()
+        .slice(0, 10),
+      recipients: recipients.map((item) => ({
+        user_id: item.userId,
+        worker_id: item.workerId,
+        worker_name: item.workerName,
+        schedules: item.summaries.map((summary) => ({
+          schedule_id: summary.id,
+          date: summary.date.toISOString(),
+          service_type: summary.serviceType,
+          roles: [...summary.roles],
+        })),
+      })),
+    };
+  }
+
+  async sendManualScheduleReminder(
+    weekStartValue: string,
+    selectedUserIds: string[],
+    triggeredBy: string,
+  ) {
+    const weekStart = this.parseWeekStart(weekStartValue);
+    const recipients = await this.getWeeklyReminderRecipients(weekStart);
+    const byUserId = new Map(recipients.map((item) => [item.userId, item]));
+    const requested = [...new Set(selectedUserIds)];
+    const dispatchId = new Types.ObjectId().toString();
+    const result = {
+      dispatch_id: dispatchId,
+      requested: requested.length,
+      notified_users: 0,
+      sent: 0,
+      failed: 0,
+      expired: 0,
+      skipped: [] as Array<{ user_id: string; reason: string }>,
+    };
+
+    for (const userId of requested) {
+      const recipient = byUserId.get(userId);
+      if (!recipient) {
+        result.skipped.push({
+          user_id: userId,
+          reason: 'No eligible linked assignment exists for this week',
+        });
+        continue;
+      }
+
+      const basePayload = this.buildPayload(recipient.summaries, weekStart);
+      const payload: PushPayload = {
+        ...basePayload,
+        tag: `manual-schedule-${dispatchId}-${userId}`,
+        data: {
+          ...basePayload.data,
+          notificationType: NotificationType.ScheduleReminder,
+        },
+      };
+      const delivery = await this.storeAndSend(
+        [userId],
+        NotificationType.ScheduleReminder,
+        payload,
+        {
+          dispatchId,
+          triggeredBy,
+          weekStart: weekStart.toISOString(),
+          serviceCount: recipient.summaries.length,
+          manual: true,
+        },
+      );
+      result.notified_users += 1;
+      result.sent += delivery.sent;
+      result.failed += delivery.failed;
+      result.expired += delivery.expired;
+    }
+
+    return result;
+  }
+
   async notifyRequestCreated(request: WorkerRequestNotificationRecord) {
     const admins = await this.usersService.findActiveByRoles([
       UserRole.Admin,
@@ -206,6 +304,120 @@ export class PushNotificationsService {
     return await this.sendToUsers(adminIds, payload);
   }
 
+  async notifySwapTargetRequested(request: WorkerRequestNotificationRecord) {
+    if (!request.target_user_id) {
+      return { sent: 0, failed: 0, expired: 0 };
+    }
+
+    const requestId = request._id.toString();
+    const payload: PushPayload = {
+      title: 'Swap response needed',
+      body: `${request.requester_worker_name} selected you for a schedule swap.`,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
+      tag: `swap-action-required-${requestId}`,
+      data: {
+        url: `/requests?requestId=${requestId}`,
+        requestId,
+        notificationType: NotificationType.SwapActionRequired,
+      },
+    };
+
+    return await this.storeAndSend(
+      [request.target_user_id.toString()],
+      NotificationType.SwapActionRequired,
+      payload,
+      { requestId },
+    );
+  }
+
+  async notifySwapTargetResponded(request: WorkerRequestNotificationRecord) {
+    const accepted = request.target_response === SwapTargetResponse.Accepted;
+    const requestId = request._id.toString();
+    const notificationType = accepted
+      ? NotificationType.SwapAccepted
+      : NotificationType.SwapDeclined;
+    const payload: PushPayload = {
+      title: accepted ? 'Swap accepted by worker' : 'Swap declined by worker',
+      body: `${request.target_worker_name ?? 'The selected worker'} ${
+        accepted ? 'accepted' : 'declined'
+      } the swap with ${request.requester_worker_name}.`,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
+      tag: `swap-target-${request.target_response}-${requestId}`,
+      data: {
+        url: `/requests?requestId=${requestId}`,
+        requestId,
+        notificationType,
+      },
+    };
+    const recipientIds = [request.requester_user_id.toString()];
+
+    if (accepted) {
+      const admins = await this.usersService.findActiveByRoles([
+        UserRole.Admin,
+        UserRole.SuperAdmin,
+      ]);
+      recipientIds.push(...admins.map((admin) => admin._id.toString()));
+    }
+
+    return await this.storeAndSend(
+      [...new Set(recipientIds)],
+      notificationType,
+      payload,
+      { requestId },
+    );
+  }
+
+  async notifyLineupPublished(
+    schedule: LineupNotificationRecord,
+    isUpdate: boolean,
+  ) {
+    const workerIds = [...new Set(
+      (schedule.assignments ?? []).map((item) => item.worker_id.toString()),
+    )];
+    const workers = await this.workersService.findWorkersByIds(workerIds);
+    const recipientIds: string[] = [];
+    for (const worker of workers as any[]) {
+      if (!worker.user_id) continue;
+      const user = await this.usersService.findById(worker.user_id.toString());
+      if (user?.is_active && user.is_verified !== false) {
+        recipientIds.push(user._id.toString());
+      }
+    }
+    const admins = await this.usersService.findActiveByRoles([
+      UserRole.Admin,
+      UserRole.SuperAdmin,
+    ]);
+    recipientIds.push(...admins.map((admin) => admin._id.toString()));
+
+    const scheduleId = schedule._id.toString();
+    const dateKey = new Date(schedule.date).toISOString().slice(0, 10);
+    const type = isUpdate
+      ? NotificationType.LineupUpdated
+      : NotificationType.LineupPosted;
+    const formattedDate = new Intl.DateTimeFormat('en-PH', {
+      month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+    }).format(new Date(schedule.date));
+    const payload: PushPayload = {
+      title: isUpdate ? 'Schedule lineup updated' : 'Schedule lineup posted',
+      body: `The ${this.formatServiceType(schedule.service_type)} lineup for ${formattedDate} is ready.`,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
+      tag: `lineup-${isUpdate ? 'updated' : 'posted'}-${scheduleId}-${Date.now()}`,
+      data: {
+        url: `/calendar?date=${dateKey}&scheduleId=${scheduleId}`,
+        notificationType: type,
+      },
+    };
+    return await this.storeAndSend(
+      [...new Set(recipientIds)],
+      type,
+      payload,
+      { scheduleId, date: dateKey, serviceType: schedule.service_type },
+    );
+  }
+
   async notifyRequestReviewed(request: WorkerRequestNotificationRecord) {
     if (
       request.status !== WorkerRequestStatus.Approved &&
@@ -216,7 +428,8 @@ export class PushNotificationsService {
 
     const approved = request.status === WorkerRequestStatus.Approved;
     const requestId = request._id.toString();
-    const userId = request.requester_user_id.toString();
+    const userIds = [request.requester_user_id.toString()];
+    if (request.target_user_id) userIds.push(request.target_user_id.toString());
     const note = request.reviewer_note?.trim();
     const noteSuffix = note ? ` Admin note: ${note.slice(0, 120)}` : '';
     const notificationType = approved
@@ -237,26 +450,39 @@ export class PushNotificationsService {
       },
     };
 
-    await this.inboxRepository.upsertMany([
-      {
+    return await this.storeAndSend(
+      [...new Set(userIds)],
+      notificationType,
+      payload,
+      { requestId },
+    );
+  }
+
+  async storeAndSend(
+    userIds: string[],
+    type: NotificationType,
+    payload: PushPayload,
+    metadata?: Record<string, unknown>,
+  ) {
+    const uniqueUserIds = [...new Set(userIds)];
+    await this.inboxRepository.upsertMany(
+      uniqueUserIds.map((userId) => ({
         userId,
-        type: notificationType,
+        type,
         title: payload.title,
         body: payload.body,
         url: payload.data.url,
         dedupeKey: payload.tag,
-        metadata: { requestId },
-      },
-    ]);
+        metadata,
+      })),
+    );
 
     if (!this.webPushClient.isConfigured()) {
-      this.logger.warn(
-        'Stored request decision inbox notification; Web Push is not configured',
-      );
+      this.logger.warn(`Stored ${type} inbox notifications; Web Push is not configured`);
       return { sent: 0, failed: 0, expired: 0 };
     }
 
-    return await this.sendToUsers([userId], payload);
+    return await this.sendToUsers(uniqueUserIds, payload);
   }
 
   @Cron(process.env.WEB_PUSH_REMINDER_CRON || '0 8 * * 1', {
@@ -402,6 +628,45 @@ export class PushNotificationsService {
     return grouped;
   }
 
+  private async getWeeklyReminderRecipients(weekStart: Date) {
+    const weekEnd = new Date(weekStart);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
+    const schedules = await this.schedulesService.getActiveSchedulesInDateRange(
+      weekStart,
+      weekEnd,
+    );
+    const summariesByWorker = this.groupSchedulesByWorker(
+      schedules as unknown as WeeklyScheduleRecord[],
+    );
+    const workers = await this.workersService.findWorkersByIds([
+      ...summariesByWorker.keys(),
+    ]);
+    const recipients: Array<{
+      userId: string;
+      workerId: string;
+      workerName: string;
+      summaries: WeeklyServiceSummary[];
+    }> = [];
+
+    for (const worker of workers as any[]) {
+      if (!worker.user_id) continue;
+      const user = await this.usersService.findById(worker.user_id.toString());
+      if (!user?.is_active || user.is_verified === false) continue;
+      const summaries = [
+        ...(summariesByWorker.get(worker._id.toString())?.values() ?? []),
+      ].sort((a, b) => a.date.getTime() - b.date.getTime());
+      if (!summaries.length) continue;
+      recipients.push({
+        userId: user._id.toString(),
+        workerId: worker._id.toString(),
+        workerName: worker.name,
+        summaries,
+      });
+    }
+
+    return recipients.sort((a, b) => a.workerName.localeCompare(b.workerName));
+  }
+
   private buildPayload(summaries: WeeklyServiceSummary[], weekStart: Date) {
     const visible = summaries.slice(0, 2).map((summary) => {
       const date = new Intl.DateTimeFormat('en-PH', {
@@ -519,5 +784,15 @@ export class PushNotificationsService {
     const daysSinceMonday = (localDate.getUTCDay() + 6) % 7;
     localDate.setUTCDate(localDate.getUTCDate() - daysSinceMonday);
     return localDate;
+  }
+
+  private parseWeekStart(value: string) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) throw new BadRequestException('week_start must be YYYY-MM-DD');
+    const date = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime()) || date.getUTCDay() !== 1) {
+      throw new BadRequestException('week_start must be a valid Monday');
+    }
+    return date;
   }
 }

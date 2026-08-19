@@ -65,7 +65,7 @@ export class SchedulesController {
   ) {
     return await this.schedulesService.updateScheduleLineup(
       id,
-      dto.lineup,
+      dto,
       request.user.sub,
       request.user.role as UserRole,
     );

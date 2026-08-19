@@ -115,6 +115,63 @@ export class WorkersService implements OnModuleInit {
     return await this.workersRepository.findByIds(ids);
   }
 
+  async getConsentEligibleWorker(workerId: string) {
+    const worker = await this.getWorkerById(workerId);
+
+    if (worker.status !== WorkerStatus.Active || !worker.user_id) {
+      return null;
+    }
+
+    const user = await this.usersService.findById(worker.user_id.toString());
+    if (!user?.is_active || user.is_verified === false) {
+      return null;
+    }
+
+    return { worker, user };
+  }
+
+  async resolveLeaderLineupSong(
+    workerId: string,
+    input: { song_id?: string; title?: string; artist?: string; key?: string },
+  ) {
+    await this.getLeaderWorker(workerId);
+    let entry: any;
+    let song: any;
+
+    if (input.song_id) {
+      entry = await this.leaderRepertoireRepository.findByWorkerAndSong(
+        workerId,
+        input.song_id,
+      );
+      if (!entry) {
+        throw new BadRequestException('Select a song from the leader repertoire');
+      }
+      song = await this.songsService.getSongById(input.song_id, true);
+    } else if (input.title) {
+      song = await this.songsService.findOrCreateSong(input.title, input.artist);
+      entry = await this.leaderRepertoireRepository.findByWorkerAndSong(
+        workerId,
+        song._id.toString(),
+      );
+      if (!entry) {
+        entry = await this.leaderRepertoireRepository.insert(
+          workerId,
+          song._id.toString(),
+          this.cleanKey(input.key ?? ''),
+        );
+      }
+    } else {
+      throw new BadRequestException('A lineup song is required');
+    }
+
+    return {
+      song_id: song._id,
+      title: song.title,
+      artist: song.artist || undefined,
+      key: this.cleanKey(input.key ?? entry.key ?? '') || undefined,
+    };
+  }
+
   async updateMyLeaderSongs(userId: string, leaderSongs: LeaderSongDto[]) {
     const worker = await this.getLinkedLeader(userId);
     await this.replaceLegacyLeaderSongs(worker._id.toString(), leaderSongs);
@@ -478,13 +535,7 @@ export class WorkersService implements OnModuleInit {
   }
 
   private cleanKey(key: string) {
-    const value = key.trim().replace(/\s+/g, ' ');
-
-    if (!value) {
-      throw new BadRequestException('Song key is required');
-    }
-
-    return value;
+    return key.trim().replace(/\s+/g, ' ');
   }
 
   private normalizeSearch(value: string) {

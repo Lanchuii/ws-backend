@@ -23,7 +23,6 @@ export class AddLeaderRepertoireDto {
   @IsString()
   spotify_url?: string;
 
-  @IsNotEmpty()
   @IsString()
   key!: string;
 }

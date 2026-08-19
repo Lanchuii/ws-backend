@@ -57,4 +57,31 @@ export class WorkerRequestsRepository {
       { new: true, session },
     ).lean().exec();
   }
+
+  async findLegacyPendingSwaps() {
+    return await this.model.find({
+      type: WorkerRequestType.Swap,
+      status: WorkerRequestStatus.Pending,
+      $or: [
+        { target_user_id: { $exists: false } },
+        { target_response: { $exists: false } },
+      ],
+    }).lean().exec();
+  }
+
+  async updatePendingForTarget(
+    id: string,
+    targetUserId: string,
+    update: Record<string, unknown>,
+  ) {
+    return await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        status: WorkerRequestStatus.Pending,
+        target_user_id: new Types.ObjectId(targetUserId),
+      },
+      { $set: update },
+      { new: true },
+    ).lean().exec();
+  }
 }

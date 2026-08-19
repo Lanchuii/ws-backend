@@ -1,8 +1,12 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
+  forwardRef,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ClientSession, Types } from 'mongoose';
@@ -22,6 +26,8 @@ import { ServiceTypesService } from 'src/service-types/service-types.service';
 import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
 import { WorkerUnavailabilityService } from 'src/worker-unavailability/worker-unavailability.service';
 import { SwapMode } from 'src/common/enums/swap-mode.enum';
+import { PushNotificationsService } from 'src/push-notifications/push-notifications.service';
+import { UpdateScheduleLineupDto } from './dto/update-schedule-lineup.dto';
 
 export interface ScheduleAssignmentSnapshot {
   schedule_id: string;
@@ -43,12 +49,17 @@ export interface PreparedScheduleSwap {
 
 @Injectable()
 export class SchedulesService {
+  private readonly logger = new Logger(SchedulesService.name);
+
   constructor(
     private readonly schedulesRepository: SchedulesRepository,
     private readonly workersService: WorkersService,
     private readonly scheduleAutoGenerationService: ScheduleAutoGenerationService,
     private readonly serviceTypesService: ServiceTypesService,
     private readonly workerUnavailabilityService: WorkerUnavailabilityService,
+    @Optional()
+    @Inject(forwardRef(() => PushNotificationsService))
+    private readonly pushNotificationsService?: PushNotificationsService,
   ) {}
 
   async getAllSchedules(query: any = {}) {
@@ -273,11 +284,41 @@ export class SchedulesService {
 
   async updateScheduleLineup(
     id: string,
-    lineup: string,
+    dto: UpdateScheduleLineupDto | string,
     userId: string,
     userRole: UserRole,
   ) {
     const schedule = await this.getScheduleById(id);
+
+    if (typeof dto === 'string') {
+      if (userRole !== UserRole.Admin && userRole !== UserRole.SuperAdmin) {
+        const worker = await this.workersService.findWorkerByUserId(userId);
+        const allowed = worker && schedule.assignments.some((assignment) =>
+          assignment.role === WorkerRole.Leader &&
+          assignment.worker_id.toString() === worker._id.toString(),
+        );
+        if (!allowed) {
+          throw new ForbiddenException(
+            'Only the assigned leader can edit this schedule lineup',
+          );
+        }
+      }
+      const legacySchedule = await this.schedulesRepository.updateRecord(
+        { _id: id } as any,
+        { lineup: dto.trim() } as any,
+      );
+      if (!legacySchedule) throw new NotFoundException('Schedule not found');
+      return legacySchedule;
+    }
+
+    const leaderAssignment = schedule.assignments.find((assignment) => {
+      return assignment.role === WorkerRole.Leader;
+    });
+    if (!leaderAssignment) {
+      throw new BadRequestException('This schedule has no assigned leader');
+    }
+
+    let leaderWorkerId = leaderAssignment.worker_id.toString();
 
     if (
       userRole !== UserRole.Admin &&
@@ -296,18 +337,85 @@ export class SchedulesService {
           'Only the assigned leader can edit this schedule lineup',
         );
       }
+      if (
+        schedule.status !== ScheduleStatus.Active ||
+        new Date(schedule.date) < this.getCurrentLocalDate()
+      ) {
+        throw new ForbiddenException(
+          'Leaders can edit lineups only for active upcoming schedules',
+        );
+      }
+      leaderWorkerId = worker!._id.toString();
     }
+
+    const spotifyUrl = dto.spotify_url?.trim() || '';
+    if (spotifyUrl) this.assertSpotifyUrl(spotifyUrl);
+
+    const songs = [] as any[];
+    for (const song of dto.songs) {
+      songs.push(
+        await this.workersService.resolveLeaderLineupSong(leaderWorkerId, song),
+      );
+    }
+
+    const normalizedCurrent = JSON.stringify({
+      songs: (schedule.songs ?? []).map((song) => ({
+        song_id: (song as any).song_id?.toString(),
+        title: song.title,
+        artist: (song as any).artist || undefined,
+        key: song.key || undefined,
+      })),
+      spotify_url: schedule.lineup || '',
+    });
+    const normalizedNext = JSON.stringify({
+      songs: songs.map((song) => ({
+        ...song,
+        song_id: song.song_id?.toString(),
+      })),
+      spotify_url: spotifyUrl,
+    });
+    if (normalizedCurrent === normalizedNext) return schedule;
+    const wasPublished = Boolean(schedule.songs?.length);
 
     const updatedSchedule = await this.schedulesRepository.updateRecord(
       { _id: id } as any,
-      { lineup: lineup.trim() } as any,
+      { songs, lineup: spotifyUrl } as any,
     );
 
     if (!updatedSchedule) {
       throw new NotFoundException('Schedule not found');
     }
 
+    if (this.pushNotificationsService) {
+      try {
+        await this.pushNotificationsService.notifyLineupPublished(
+          updatedSchedule as any,
+          wasPublished,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Could not notify recipients for lineup ${id}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
     return updatedSchedule;
+  }
+
+  private assertSpotifyUrl(value: string) {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new BadRequestException('Enter a valid Spotify link');
+    }
+    if (
+      url.protocol !== 'https:' ||
+      !['open.spotify.com', 'spotify.link'].includes(url.hostname.toLowerCase())
+    ) {
+      throw new BadRequestException('Enter an HTTPS Spotify share link');
+    }
   }
 
   async deleteScheduleById(id: string) {
@@ -340,6 +448,9 @@ export class SchedulesService {
         const workerId = worker._id.toString();
         if (workerId === requesterWorkerId) continue;
 
+        const consentTarget = await this.workersService.getConsentEligibleWorker(workerId);
+        if (!consentTarget) continue;
+
         try {
           await this.prepareSwap(
             requesterWorkerId,
@@ -366,6 +477,9 @@ export class SchedulesService {
       for (const assignment of schedule.assignments ?? []) {
         const workerId = assignment.worker_id.toString();
         if (workerId === requesterWorkerId) continue;
+
+        const consentTarget = await this.workersService.getConsentEligibleWorker(workerId);
+        if (!consentTarget) continue;
 
         try {
           const prepared = await this.prepareSwap(
