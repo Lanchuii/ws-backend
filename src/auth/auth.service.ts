@@ -10,6 +10,7 @@ import { UsersService } from 'src/users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { SignupDto } from './dto/signup.dto';
 
 @Injectable()
@@ -88,6 +89,10 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+  }
+
+  async forgotPassword(dto: ForgotPasswordDto) {
+    return await this.usersService.requestPasswordReset(dto.username);
   }
 
   async resetPassword(userId: string, dto: ResetPasswordDto) {

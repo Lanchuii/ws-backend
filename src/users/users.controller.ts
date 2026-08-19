@@ -7,7 +7,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserVerificationDto } from './dto/update-user-verification.dto';
-import { UpdatePasswordResetRequirementDto } from './dto/update-password-reset-requirement.dto';
+import { ApprovePasswordResetRequestDto } from './dto/approve-password-reset-request.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -30,6 +30,11 @@ export class UsersController {
   @Roles(UserRole.Admin)
   async getLinkableUsers() {
     return await this.usersService.getLinkableUsers();
+  }
+
+  @Get('password-reset-requests')
+  async getPasswordResetRequests() {
+    return await this.usersService.getPasswordResetRequests();
   }
 
   @Get(':id')
@@ -58,14 +63,20 @@ export class UsersController {
     );
   }
 
-  @Patch(':id/password-reset')
-  async updatePasswordResetRequirement(
+  @Patch(':id/password-reset-request/approve')
+  async approvePasswordResetRequest(
     @Param('id') id: string,
-    @Body() dto: UpdatePasswordResetRequirementDto,
+    @Body() dto: ApprovePasswordResetRequestDto,
   ) {
-    return await this.usersService.updatePasswordResetRequirement(
+    return await this.usersService.approvePasswordResetRequest(
       id,
-      dto.required,
+      dto.temporary_password,
     );
+  }
+
+
+  @Patch(':id/password-reset-request/reject')
+  async rejectPasswordResetRequest(@Param('id') id: string) {
+    return await this.usersService.rejectPasswordResetRequest(id);
   }
 }

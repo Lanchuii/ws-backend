@@ -14,6 +14,10 @@ describe('UsersService', () => {
     findOldestAdmin: jest.fn(),
     findByEmail: jest.fn(),
     findByUsername: jest.fn(),
+    requestPasswordReset: jest.fn(),
+    getPendingPasswordResetRequests: jest.fn(),
+    approvePasswordResetRequest: jest.fn(),
+    rejectPasswordResetRequest: jest.fn(),
     insertRecord: jest.fn(),
     getRecords: jest.fn(),
     getRecordById: jest.fn(),
@@ -156,25 +160,78 @@ describe('UsersService', () => {
     expect(user.is_verified).toBe(true);
   });
 
-  it('lets a super admin mark an account for a required password reset', async () => {
-    repository.updateRecord.mockResolvedValue({
+  it('submits a non-identifying password reset request', async () => {
+    repository.requestPasswordReset.mockResolvedValue({
       _id: 'member-id',
-      email: 'member@example.com',
-      password_hash: 'hash',
+      username: 'member',
+      password_reset_requested_at: new Date(),
+    });
+
+    const result = await service.requestPasswordReset(' member ');
+
+    expect(repository.requestPasswordReset).toHaveBeenCalledWith('member');
+    expect(result.message).toContain(
+      'If an eligible account matches that username',
+    );
+  });
+
+  it('lists pending password reset requests without password data', async () => {
+    const requestedAt = new Date('2026-08-19T10:00:00.000Z');
+    repository.getPendingPasswordResetRequests.mockResolvedValue([
+      {
+        _id: 'member-id',
+        email: 'member@example.com',
+        username: 'member',
+        password_hash: 'hidden',
+        password_reset_requested_at: requestedAt,
+      },
+    ]);
+
+    const result = await service.getPasswordResetRequests();
+
+    expect(result).toEqual([
+      {
+        _id: 'member-id',
+        email: 'member@example.com',
+        username: 'member',
+        requested_at: requestedAt,
+      },
+    ]);
+  });
+
+  it('hashes the temporary password and approves the pending request', async () => {
+    passwordService.hashPassword.mockResolvedValue('temporary-password-hash');
+    repository.approvePasswordResetRequest.mockResolvedValue({
+      _id: 'member-id',
       password_reset_required: true,
     });
 
-    const user = await service.updatePasswordResetRequirement(
+    const result = await service.approvePasswordResetRequest(
       'member-id',
-      true,
+      'temporary-password',
     );
 
-    expect(repository.updateRecord).toHaveBeenCalledWith(
-      { _id: 'member-id' },
-      { password_reset_required: true },
+    expect(passwordService.hashPassword).toHaveBeenCalledWith(
+      'temporary-password',
     );
-    expect(user.password_reset_required).toBe(true);
-    expect(user.password_hash).toBeUndefined();
+    expect(repository.approvePasswordResetRequest).toHaveBeenCalledWith(
+      'member-id',
+      'temporary-password-hash',
+    );
+    expect(result.message).toBe('Temporary password assigned successfully');
+  });
+
+  it('rejects a pending password reset request', async () => {
+    repository.rejectPasswordResetRequest.mockResolvedValue({
+      _id: 'member-id',
+    });
+
+    const result = await service.rejectPasswordResetRequest('member-id');
+
+    expect(repository.rejectPasswordResetRequest).toHaveBeenCalledWith(
+      'member-id',
+    );
+    expect(result.message).toBe('Password reset request rejected');
   });
 
   it('hashes the new password, clears the requirement, and rotates tokens', async () => {

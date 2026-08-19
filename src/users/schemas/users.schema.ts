@@ -27,6 +27,9 @@ export class User {
   @Prop({ default: false })
   password_reset_required!: boolean;
 
+  @Prop()
+  password_reset_requested_at?: Date;
+
   @Prop({ default: 0 })
   token_version!: number;
 }

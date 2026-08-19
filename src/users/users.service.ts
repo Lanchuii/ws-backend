@@ -84,6 +84,26 @@ export class UsersService implements OnModuleInit {
     return await this.usersRepository.findByUsername(login);
   }
 
+  async requestPasswordReset(username: string) {
+    await this.usersRepository.requestPasswordReset(username.trim());
+
+    return {
+      message:
+        'If an eligible account matches that username, the request was sent to a super admin.',
+    };
+  }
+
+  async getPasswordResetRequests() {
+    const users = await this.usersRepository.getPendingPasswordResetRequests();
+
+    return users.map((user: any) => ({
+      _id: user._id,
+      email: user.email,
+      username: user.username,
+      requested_at: user.password_reset_requested_at,
+    }));
+  }
+
   async updateUser(id: string, dto: UpdateUserDto) {
     await this.ensureSuperAdminContinuity(id, dto);
 
@@ -145,16 +165,30 @@ export class UsersService implements OnModuleInit {
     return this.toPublicUser(user);
   }
 
-  async updatePasswordResetRequirement(id: string, required: boolean) {
-    const user = await this.usersRepository.updateRecord({ _id: id } as any, {
-      password_reset_required: required,
-    } as any);
+  async approvePasswordResetRequest(id: string, temporaryPassword: string) {
+    const passwordHash = await this.passwordService.hashPassword(
+      temporaryPassword,
+    );
+    const user = await this.usersRepository.approvePasswordResetRequest(
+      id,
+      passwordHash,
+    );
 
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException('Pending password reset request not found');
     }
 
-    return this.toPublicUser(user);
+    return { message: 'Temporary password assigned successfully' };
+  }
+
+  async rejectPasswordResetRequest(id: string) {
+    const user = await this.usersRepository.rejectPasswordResetRequest(id);
+
+    if (!user) {
+      throw new NotFoundException('Pending password reset request not found');
+    }
+
+    return { message: 'Password reset request rejected' };
   }
 
   async completeRequiredPasswordReset(id: string, password: string) {
@@ -186,7 +220,12 @@ export class UsersService implements OnModuleInit {
       return user;
     }
 
-    const { password_hash, token_version, ...publicUser } = user;
+    const {
+      password_hash,
+      token_version,
+      password_reset_requested_at,
+      ...publicUser
+    } = user;
     return {
       ...publicUser,
       is_verified: publicUser.is_verified !== false,

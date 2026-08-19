@@ -12,6 +12,7 @@ describe('AuthService', () => {
     findByLogin: jest.fn(),
     findById: jest.fn(),
     createUser: jest.fn(),
+    requestPasswordReset: jest.fn(),
     completeRequiredPasswordReset: jest.fn(),
     toPublicUser: jest.fn((user) => {
       const { password_hash, ...publicUser } = user;
@@ -122,6 +123,18 @@ describe('AuthService', () => {
     });
     expect(result.verificationRequired).toBe(true);
     expect(result).not.toHaveProperty('accessToken');
+  });
+
+  it('forwards forgot-password requests without exposing account existence', async () => {
+    usersService.requestPasswordReset.mockResolvedValue({
+      message:
+        'If an eligible account matches that username, the request was sent to a super admin.',
+    });
+
+    const result = await service.forgotPassword({ username: 'member' });
+
+    expect(usersService.requestPasswordReset).toHaveBeenCalledWith('member');
+    expect(result.message).toContain('If an eligible account matches');
   });
 
   it('returns new tokens for a valid refresh token', async () => {

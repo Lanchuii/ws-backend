@@ -23,6 +23,61 @@ export class UsersRepository extends BaseRepository<UserDocument> {
     return await this.userModel.findOne({ username }).lean().exec();
   }
 
+  async requestPasswordReset(username: string) {
+    return await this.userModel
+      .findOneAndUpdate(
+        {
+          username,
+          is_active: true,
+          is_verified: { $ne: false },
+          password_reset_requested_at: { $exists: false },
+        },
+        { $set: { password_reset_requested_at: new Date() } },
+        { new: true },
+      )
+      .lean()
+      .exec();
+  }
+
+  async getPendingPasswordResetRequests() {
+    return await this.userModel
+      .find({ password_reset_requested_at: { $exists: true } })
+      .select('_id email username password_reset_requested_at')
+      .sort({ password_reset_requested_at: 1 })
+      .lean()
+      .exec();
+  }
+
+  async approvePasswordResetRequest(id: string, passwordHash: string) {
+    return await this.userModel
+      .findOneAndUpdate(
+        { _id: id, password_reset_requested_at: { $exists: true } },
+        {
+          $set: {
+            password_hash: passwordHash,
+            password_reset_required: true,
+          },
+          $unset: { password_reset_requested_at: 1 },
+          $inc: { token_version: 1 },
+        },
+        { new: true },
+      )
+      .select('+token_version')
+      .lean()
+      .exec();
+  }
+
+  async rejectPasswordResetRequest(id: string) {
+    return await this.userModel
+      .findOneAndUpdate(
+        { _id: id, password_reset_requested_at: { $exists: true } },
+        { $unset: { password_reset_requested_at: 1 } },
+        { new: true },
+      )
+      .lean()
+      .exec();
+  }
+
   async countSuperAdmins(): Promise<number> {
     return await this.userModel
       .countDocuments({ role: UserRole.SuperAdmin })
@@ -77,6 +132,7 @@ export class UsersRepository extends BaseRepository<UserDocument> {
             password_hash: passwordHash,
             password_reset_required: false,
           },
+          $unset: { password_reset_requested_at: 1 },
           $inc: { token_version: 1 },
         },
         { new: true },
