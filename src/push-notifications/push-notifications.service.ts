@@ -220,6 +220,18 @@ export class PushNotificationsService implements OnModuleInit, OnModuleDestroy {
     return await this.inboxRepository.markAllRead(userId);
   }
 
+  async deleteInboxNotification(userId: string, id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Notification not found');
+    }
+
+    const result = await this.inboxRepository.deleteForUser(userId, id);
+    if (!result.deletedCount) {
+      throw new NotFoundException('Notification not found');
+    }
+    return { deleted: true };
+  }
+
   async previewScheduleReminder(weekStartValue: string) {
     const weekStart = this.parseWeekStart(weekStartValue);
     const recipients = await this.getWeeklyReminderRecipients(weekStart);

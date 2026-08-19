@@ -61,6 +61,14 @@ export class PushNotificationsController {
     return await this.service.markInboxNotificationRead(request.user.sub, id);
   }
 
+  @Delete('inbox/:id')
+  async deleteInboxNotification(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return await this.service.deleteInboxNotification(request.user.sub, id);
+  }
+
   @Post('subscriptions')
   async subscribe(
     @Req() request: AuthenticatedRequest,

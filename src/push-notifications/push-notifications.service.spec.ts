@@ -52,6 +52,7 @@ describe('PushNotificationsService', () => {
     listForUser: jest.fn(),
     markRead: jest.fn(),
     markAllRead: jest.fn(),
+    deleteForUser: jest.fn(),
   };
   const appEvents = {
     passwordResetRequested$: {
@@ -97,6 +98,7 @@ describe('PushNotificationsService', () => {
       pagination: { page: 0, per_page: 20, last_page: 0, total_rows: 0 },
     });
     inboxRepository.markAllRead.mockResolvedValue({ updated: 0 });
+    inboxRepository.deleteForUser.mockResolvedValue({ deletedCount: 1 });
   });
 
   it('returns the configured VAPID public key', () => {
@@ -123,9 +125,22 @@ describe('PushNotificationsService', () => {
     await service.markAllInboxNotificationsRead(userId);
     expect(inboxRepository.markAllRead).toHaveBeenCalledWith(userId);
 
+    await expect(
+      service.deleteInboxNotification(userId, notificationId),
+    ).resolves.toEqual({ deleted: true });
+    expect(inboxRepository.deleteForUser).toHaveBeenCalledWith(
+      userId,
+      notificationId,
+    );
+
     inboxRepository.markRead.mockResolvedValue(null);
     await expect(
       service.markInboxNotificationRead(userId, notificationId),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    inboxRepository.deleteForUser.mockResolvedValue({ deletedCount: 0 });
+    await expect(
+      service.deleteInboxNotification(userId, notificationId),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 

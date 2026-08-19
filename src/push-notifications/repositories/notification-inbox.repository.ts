@@ -96,4 +96,10 @@ export class NotificationInboxRepository {
       .exec();
     return { updated: result.modifiedCount };
   }
+
+  async deleteForUser(userId: string, id: string) {
+    return await this.model
+      .deleteOne({ _id: id, user_id: new Types.ObjectId(userId) })
+      .exec();
+  }
 }
