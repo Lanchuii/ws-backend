@@ -1,0 +1,41 @@
+import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { AuthModule } from 'src/auth/auth.module';
+import { SchedulesModule } from 'src/schedules/schedules.module';
+import { UsersModule } from 'src/users/users.module';
+import { WorkersModule } from 'src/workers/workers.module';
+import { PushNotificationsController } from './push-notifications.controller';
+import { PushNotificationsService } from './push-notifications.service';
+import { NotificationInboxRepository } from './repositories/notification-inbox.repository';
+import { PushSubscriptionsRepository } from './repositories/push-subscriptions.repository';
+import {
+  NotificationInboxRecord,
+  NotificationInboxSchema,
+} from './schemas/notification-inbox.schema';
+import {
+  PushSubscriptionRecord,
+  PushSubscriptionSchema,
+} from './schemas/push-subscription.schema';
+import { WebPushClient } from './web-push.client';
+
+@Module({
+  imports: [
+    MongooseModule.forFeature([
+      { name: PushSubscriptionRecord.name, schema: PushSubscriptionSchema },
+      { name: NotificationInboxRecord.name, schema: NotificationInboxSchema },
+    ]),
+    AuthModule,
+    SchedulesModule,
+    WorkersModule,
+    UsersModule,
+  ],
+  controllers: [PushNotificationsController],
+  providers: [
+    PushNotificationsService,
+    NotificationInboxRepository,
+    PushSubscriptionsRepository,
+    WebPushClient,
+  ],
+  exports: [PushNotificationsService],
+})
+export class PushNotificationsModule {}

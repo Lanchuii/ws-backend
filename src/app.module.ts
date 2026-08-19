@@ -11,6 +11,7 @@ import { WorkerGroupsModule } from './worker-groups/worker-groups.module';
 import { ServiceTypesModule } from './service-types/service-types.module';
 import { SongsModule } from './songs/songs.module';
 import { WorkerRequestsModule } from './worker-requests/worker-requests.module';
+import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { WorkerRequestsModule } from './worker-requests/worker-requests.module';
     ServiceTypesModule,
     SongsModule,
     WorkerRequestsModule,
+    PushNotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

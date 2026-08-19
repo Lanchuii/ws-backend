@@ -47,6 +47,18 @@ export class UsersRepository extends BaseRepository<UserDocument> {
       .exec();
   }
 
+  async findActiveByRoles(roles: UserRole[]) {
+    return await this.userModel
+      .find({
+        role: { $in: roles },
+        is_active: true,
+        is_verified: true,
+      })
+      .select('_id role')
+      .lean()
+      .exec();
+  }
+
   async markLegacyUsersVerified() {
     return await this.userModel
       .updateMany(

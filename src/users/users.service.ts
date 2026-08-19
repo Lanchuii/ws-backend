@@ -56,6 +56,10 @@ export class UsersService implements OnModuleInit {
     return await this.usersRepository.getRecordById(id);
   }
 
+  async findActiveByRoles(roles: UserRole[]) {
+    return await this.usersRepository.findActiveByRoles(roles);
+  }
+
   async getUserById(id: string) {
     const user = await this.findById(id);
 

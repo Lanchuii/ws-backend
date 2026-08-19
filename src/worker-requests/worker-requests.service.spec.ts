@@ -52,6 +52,10 @@ describe('WorkerRequestsService', () => {
     assertWorkersAvailable: jest.fn(),
     activate: jest.fn(),
   };
+  const pushNotificationsService = {
+    notifyRequestCreated: jest.fn(),
+    notifyRequestReviewed: jest.fn(),
+  };
   let service: WorkerRequestsService;
 
   beforeEach(() => {
@@ -61,6 +65,7 @@ describe('WorkerRequestsService', () => {
       repository as any,
       schedulesService as any,
       unavailabilityService as any,
+      pushNotificationsService as any,
     );
     unavailabilityService.requireLinkedWorker.mockResolvedValue({
       _id: new Types.ObjectId(workerId),
@@ -68,6 +73,12 @@ describe('WorkerRequestsService', () => {
     });
     schedulesService.prepareSwap.mockResolvedValue(prepared);
     repository.create.mockImplementation(async (value) => value);
+    pushNotificationsService.notifyRequestCreated.mockResolvedValue({
+      sent: 0,
+    });
+    pushNotificationsService.notifyRequestReviewed.mockResolvedValue({
+      sent: 0,
+    });
   });
 
   it('creates a replacement request from the linked worker assignment', async () => {
@@ -94,6 +105,9 @@ describe('WorkerRequestsService', () => {
       requester_worker_name: 'Joshua',
       target_worker_name: 'Mathew',
     });
+    expect(pushNotificationsService.notifyRequestCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ type: WorkerRequestType.Swap }),
+    );
   });
 
   it('prevents duplicate pending unavailable requests', async () => {
@@ -135,7 +149,41 @@ describe('WorkerRequestsService', () => {
       session,
     );
     expect(result.status).toBe(WorkerRequestStatus.Approved);
+    expect(pushNotificationsService.notifyRequestReviewed).toHaveBeenCalledWith(
+      expect.objectContaining({ status: WorkerRequestStatus.Approved }),
+    );
     expect(session.endSession).toHaveBeenCalled();
+  });
+
+  it('notifies the requester when an admin rejects a request', async () => {
+    const request = {
+      _id: new Types.ObjectId(requestId),
+      type: WorkerRequestType.Unavailable,
+      status: WorkerRequestStatus.Pending,
+      requester_user_id: new Types.ObjectId(userId),
+      requester_worker_id: new Types.ObjectId(workerId),
+      requester_worker_name: 'Joshua',
+      unavailable_date: date,
+    };
+    repository.findById.mockResolvedValue(request);
+    repository.updatePending.mockResolvedValue({
+      ...request,
+      status: WorkerRequestStatus.Rejected,
+      reviewer_note: 'Team coverage is incomplete.',
+    });
+
+    await service.reject(
+      requestId,
+      new Types.ObjectId().toString(),
+      'Team coverage is incomplete.',
+    );
+
+    expect(pushNotificationsService.notifyRequestReviewed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: WorkerRequestStatus.Rejected,
+        requester_user_id: request.requester_user_id,
+      }),
+    );
   });
 
   it('keeps unavailable requests pending while assignments still exist', async () => {
