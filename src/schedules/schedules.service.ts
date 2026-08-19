@@ -487,7 +487,7 @@ export class SchedulesService {
             mode,
             sourceScheduleId,
             sourceSlotKey,
-            undefined,
+            workerId,
             schedule._id.toString(),
             assignment.slot_key,
           );
@@ -527,6 +527,7 @@ export class SchedulesService {
       const sourceAssignments = this.replaceAssignmentWorker(
         source.schedule.assignments,
         sourceSlotKey,
+        requesterWorkerId,
         targetWorkerId,
       );
       const serviceType = await this.serviceTypesService.getByCode(
@@ -559,7 +560,11 @@ export class SchedulesService {
     const targetSchedule = targetScheduleId === sourceScheduleId
       ? source.schedule
       : await this.getRequestableSchedule(targetScheduleId, session);
-    const targetAssignment = this.findAssignment(targetSchedule, targetSlotKey);
+    const targetAssignment = this.findAssignment(
+      targetSchedule,
+      targetSlotKey,
+      targetWorkerId,
+    );
     const targetWorkerIdValue = targetAssignment.worker_id.toString();
 
     if (targetWorkerIdValue === requesterWorkerId) {
@@ -569,13 +574,12 @@ export class SchedulesService {
     const targetSnapshot = this.toSnapshot(targetSchedule, targetAssignment);
 
     if (targetScheduleId === sourceScheduleId) {
-      if (targetSlotKey === sourceSlotKey) {
-        throw new BadRequestException('Select a different assignment');
-      }
       const projected = this.swapWorkersInAssignments(
         source.schedule.assignments,
         sourceSlotKey,
+        requesterWorkerId,
         targetSlotKey,
+        targetWorkerIdValue,
       );
       const serviceType = await this.serviceTypesService.getByCode(
         source.schedule.service_type,
@@ -600,11 +604,13 @@ export class SchedulesService {
     const projectedSource = this.replaceAssignmentWorker(
       source.schedule.assignments,
       sourceSlotKey,
+      requesterWorkerId,
       targetWorkerIdValue,
     );
     const projectedTarget = this.replaceAssignmentWorker(
       targetSchedule.assignments,
       targetSlotKey,
+      targetWorkerIdValue,
       requesterWorkerId,
     );
     const [sourceServiceType, targetServiceType] = await Promise.all([
@@ -707,7 +713,7 @@ export class SchedulesService {
     session?: ClientSession,
   ) {
     const schedule = await this.getRequestableSchedule(scheduleId, session);
-    const assignment = this.findAssignment(schedule, slotKey);
+    const assignment = this.findAssignment(schedule, slotKey, workerId);
 
     if (assignment.worker_id.toString() !== workerId) {
       throw new ForbiddenException(
@@ -733,9 +739,11 @@ export class SchedulesService {
     return schedule as any;
   }
 
-  private findAssignment(schedule: any, slotKey: string) {
+  private findAssignment(schedule: any, slotKey: string, workerId?: string) {
     const assignment = schedule.assignments?.find(
-      (item) => item.slot_key === slotKey,
+      (item) =>
+        item.slot_key === slotKey &&
+        (!workerId || item.worker_id.toString() === workerId),
     );
     if (!assignment) throw new BadRequestException('Schedule assignment not found');
     return assignment;
@@ -756,14 +764,16 @@ export class SchedulesService {
   private replaceAssignmentWorker(
     assignments: any[],
     slotKey: string,
-    workerId: string,
+    currentWorkerId: string,
+    replacementWorkerId: string,
   ): ScheduleAssignmentDto[] {
     return assignments.map((assignment) => ({
       slot_key: assignment.slot_key,
       role: assignment.role,
       worker_id:
-        assignment.slot_key === slotKey
-          ? workerId
+        assignment.slot_key === slotKey &&
+        assignment.worker_id.toString() === currentWorkerId
+          ? replacementWorkerId
           : assignment.worker_id.toString(),
     }));
   }
@@ -771,17 +781,29 @@ export class SchedulesService {
   private swapWorkersInAssignments(
     assignments: any[],
     sourceSlotKey: string,
+    sourceWorkerId: string,
     targetSlotKey: string,
+    targetWorkerId: string,
   ) {
-    const source = this.findAssignment({ assignments }, sourceSlotKey);
-    const target = this.findAssignment({ assignments }, targetSlotKey);
+    const source = this.findAssignment(
+      { assignments },
+      sourceSlotKey,
+      sourceWorkerId,
+    );
+    const target = this.findAssignment(
+      { assignments },
+      targetSlotKey,
+      targetWorkerId,
+    );
 
     return assignments.map((assignment) => ({
       slot_key: assignment.slot_key,
       role: assignment.role,
-      worker_id: assignment.slot_key === sourceSlotKey
+      worker_id: assignment.slot_key === sourceSlotKey &&
+        assignment.worker_id.toString() === sourceWorkerId
         ? target.worker_id.toString()
-        : assignment.slot_key === targetSlotKey
+        : assignment.slot_key === targetSlotKey &&
+            assignment.worker_id.toString() === targetWorkerId
           ? source.worker_id.toString()
           : assignment.worker_id.toString(),
     }));
@@ -886,7 +908,7 @@ export class SchedulesService {
         ? slots.find((item) => item.key === assignment.slot_key)
         : slots.find(
             (item) =>
-              !usedSlotKeys.has(item.key) &&
+              (!usedSlotKeys.has(item.key) || item.allow_multiple) &&
               item.allowed_roles.includes(assignment.role),
           );
 
@@ -896,7 +918,7 @@ export class SchedulesService {
         );
       }
 
-      if (usedSlotKeys.has(slot.key)) {
+      if (usedSlotKeys.has(slot.key) && !slot.allow_multiple) {
         throw new BadRequestException(
           `Assignment slot "${slot.label}" can only be filled once`,
         );

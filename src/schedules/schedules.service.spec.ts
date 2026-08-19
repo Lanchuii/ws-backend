@@ -21,6 +21,7 @@ describe('SchedulesService', () => {
   const drumsId = new Types.ObjectId().toString();
   const beatboxId = new Types.ObjectId().toString();
   const backupId = new Types.ObjectId().toString();
+  const secondBackupId = new Types.ObjectId().toString();
   const keyboardId = new Types.ObjectId().toString();
   const leaderOnlyId = new Types.ObjectId().toString();
   const repository = {
@@ -120,6 +121,12 @@ describe('SchedulesService', () => {
           _id: backupId,
           name: 'Backup',
           roles: [WorkerRole.Backup, WorkerRole.Acoustic],
+          status: WorkerStatus.Active,
+        },
+        [secondBackupId]: {
+          _id: secondBackupId,
+          name: 'Second Backup',
+          roles: [WorkerRole.Backup],
           status: WorkerStatus.Active,
         },
         [keyboardId]: {
@@ -294,6 +301,47 @@ describe('SchedulesService', () => {
     expect(workersService.findWorkerByUserId).not.toHaveBeenCalled();
   });
 
+  it('allows admins to update a structured lineup for the assigned leader', async () => {
+    const scheduleId = new Types.ObjectId().toString();
+    const songId = new Types.ObjectId();
+    repository.getRecordById.mockResolvedValue({
+      _id: scheduleId,
+      date: new Date('2099-09-06T00:00:00.000Z'),
+      status: ScheduleStatus.Active,
+      songs: [],
+      assignments: [{
+        role: WorkerRole.Leader,
+        worker_id: new Types.ObjectId(leaderId),
+      }],
+    });
+    workersService.resolveLeaderLineupSong.mockResolvedValue({
+      song_id: songId,
+      title: 'Grace',
+      key: 'G',
+    });
+    repository.updateRecord.mockImplementation(async (_filter, update) => ({
+      _id: scheduleId,
+      ...update,
+    }));
+
+    const result = await service.updateScheduleLineup(
+      scheduleId,
+      {
+        songs: [{ song_id: songId.toString(), key: 'G' }],
+        spotify_url: 'https://open.spotify.com/playlist/example',
+      },
+      'admin-id',
+      UserRole.Admin,
+    );
+
+    expect(result.songs).toHaveLength(1);
+    expect(workersService.resolveLeaderLineupSong).toHaveBeenCalledWith(
+      leaderId,
+      { song_id: songId.toString(), key: 'G' },
+    );
+    expect(workersService.findWorkerByUserId).not.toHaveBeenCalled();
+  });
+
   it('creates a schedule when required roles are present', async () => {
     const schedule = await service.createSchedule({
       date: '2099-07-12',
@@ -462,6 +510,50 @@ describe('SchedulesService', () => {
         ],
       }),
     ).rejects.toThrow('multiple roles');
+  });
+
+  it('allows multiple workers in a slot configured for multiple assignments', async () => {
+    const configured = getServiceTypeConfiguration(ServiceType.Main);
+    serviceTypesService.getByCode.mockResolvedValue({
+      ...configured,
+      assignment_slots: configured.assignment_slots.map((slot: any) => ({
+        ...slot,
+        allow_multiple: slot.key === 'backup',
+      })),
+    });
+
+    const schedule = await service.createSchedule({
+      date: '2099-07-12',
+      service_type: ServiceType.Main,
+      assignments: [
+        { slot_key: 'leader', role: WorkerRole.Leader, worker_id: leaderId },
+        { slot_key: 'backup', role: WorkerRole.Backup, worker_id: backupId },
+        { slot_key: 'backup', role: WorkerRole.Backup, worker_id: secondBackupId },
+        { slot_key: 'acoustic', role: WorkerRole.Acoustic, worker_id: acousticId },
+        { slot_key: 'bass', role: WorkerRole.Bass, worker_id: bassId },
+        { slot_key: 'drums', role: WorkerRole.Drums, worker_id: drumsId },
+      ],
+    });
+
+    expect(schedule.assignments.filter((item: any) => item.slot_key === 'backup'))
+      .toHaveLength(2);
+  });
+
+  it('still rejects multiple workers in a single-worker slot', async () => {
+    await expect(
+      service.createSchedule({
+        date: '2099-07-12',
+        service_type: ServiceType.Main,
+        assignments: [
+          { slot_key: 'leader', role: WorkerRole.Leader, worker_id: leaderId },
+          { slot_key: 'backup', role: WorkerRole.Backup, worker_id: backupId },
+          { slot_key: 'backup', role: WorkerRole.Backup, worker_id: secondBackupId },
+          { slot_key: 'acoustic', role: WorkerRole.Acoustic, worker_id: acousticId },
+          { slot_key: 'bass', role: WorkerRole.Bass, worker_id: bassId },
+          { slot_key: 'drums', role: WorkerRole.Drums, worker_id: drumsId },
+        ],
+      }),
+    ).rejects.toThrow('can only be filled once');
   });
 
   it('rejects worker date conflicts', async () => {

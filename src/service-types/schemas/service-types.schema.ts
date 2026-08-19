@@ -64,6 +64,9 @@ export class AssignmentSlot {
   @Prop({ default: false })
   required!: boolean;
 
+  @Prop({ default: false })
+  allow_multiple!: boolean;
+
   @Prop({ default: 0 })
   display_order!: number;
 

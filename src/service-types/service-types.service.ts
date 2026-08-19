@@ -234,11 +234,13 @@ const slot = (
   required: boolean,
   display_order: number,
   worker_eligibility_override?: ReturnType<typeof groupsEligibility>,
+  allow_multiple = false,
 ) => ({
   key,
   label,
   allowed_roles,
   required,
+  allow_multiple,
   display_order,
   ...(worker_eligibility_override ? { worker_eligibility_override } : {}),
 });
@@ -275,6 +277,7 @@ const buildDefaultServiceTypes = (groupId: Record<string, string>) => {
             [groupId.main, groupId.youth],
             [groupId.main],
           ),
+          true,
         ),
         slot('acoustic', 'Main Acoustic', [WorkerRole.Acoustic], true, 30),
         slot('electric', 'Electric', [WorkerRole.Electric], false, 40),
@@ -357,7 +360,11 @@ const normalizeCode = (value: string) =>
     .replace(/^-+|-+$/g, '');
 
 const normalizeSlots = (slots: AssignmentSlotDto[]) =>
-  slots.map((item) => ({ ...item, key: normalizeCode(item.key) }));
+  slots.map((item) => ({
+    ...item,
+    key: normalizeCode(item.key),
+    allow_multiple: item.allow_multiple ?? false,
+  }));
 
 const toEligibilityDto = (value: any): WorkerEligibilityDto => ({
   mode: value.mode,
@@ -370,6 +377,7 @@ const toAssignmentSlotDto = (value: any): AssignmentSlotDto => ({
   label: value.label,
   allowed_roles: value.allowed_roles,
   required: value.required,
+  allow_multiple: value.allow_multiple ?? false,
   display_order: value.display_order,
   ...(value.worker_eligibility_override
     ? {

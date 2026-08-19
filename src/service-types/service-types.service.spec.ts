@@ -46,12 +46,14 @@ describe('ServiceTypesService', () => {
           label: 'Leader',
           allowed_roles: [WorkerRole.Leader],
           required: true,
+          allow_multiple: true,
           display_order: 10,
         },
       ],
     });
 
     expect(result.code).toBe('prayer-night');
+    expect(result.assignment_slots[0].allow_multiple).toBe(true);
     expect(repository.insertRecord).toHaveBeenCalled();
   });
 

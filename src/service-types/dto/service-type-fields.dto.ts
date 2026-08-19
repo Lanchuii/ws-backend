@@ -62,6 +62,10 @@ export class AssignmentSlotDto {
   @IsBoolean()
   required!: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  allow_multiple?: boolean;
+
   @IsInt()
   @Min(0)
   display_order!: number;
