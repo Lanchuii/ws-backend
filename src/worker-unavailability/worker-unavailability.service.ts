@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ClientSession, Types } from 'mongoose';
 import { WorkersService } from 'src/workers/workers.service';
+import { scheduleConflictException } from 'src/common/schedule-conflict';
 import { WorkerUnavailabilityRepository } from './repositories/worker-unavailability.repository';
 
 @Injectable()
@@ -24,8 +25,22 @@ export class WorkerUnavailabilityService {
     const records = await this.repository.findActive(workerIds, date, session);
 
     if (records.length) {
-      throw new BadRequestException(
-        'An assigned worker is unavailable on this date',
+      const dateKey = date.toISOString().slice(0, 10);
+      const conflicts = await Promise.all(records.map(async (record) => {
+        const worker = await this.workersService.getWorkerById(
+          record.worker_id.toString(),
+        );
+        return {
+          code: 'WORKER_UNAVAILABLE' as const,
+          date: dateKey,
+          worker_id: record.worker_id.toString(),
+          worker_name: worker.name,
+          message: `${worker.name} is unavailable on this date`,
+        };
+      }));
+      throw scheduleConflictException(
+        'One or more assigned workers are unavailable on this date',
+        conflicts,
       );
     }
   }
