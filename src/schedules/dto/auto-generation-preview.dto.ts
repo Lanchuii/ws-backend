@@ -1,5 +1,30 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  ArrayNotEmpty,
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+
+export class AutoGenerationWorkerPoolDto {
+  @IsString()
+  service_type: string;
+
+  @IsString()
+  slot_key: string;
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsString({ each: true })
+  worker_ids: string[];
+}
 
 export class AutoGenerationPreviewDto {
   @Type(() => Number)
@@ -17,6 +42,19 @@ export class AutoGenerationPreviewDto {
   @IsOptional()
   @IsString()
   service_type?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayUnique()
+  @IsString({ each: true })
+  service_types?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AutoGenerationWorkerPoolDto)
+  worker_pools?: AutoGenerationWorkerPoolDto[];
 
   @IsOptional()
   @IsBoolean()

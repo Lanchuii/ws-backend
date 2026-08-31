@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { WorkerRole } from 'src/common/enums/worker-role.enum';
 import { WorkerStatus } from 'src/common/enums/worker-status.enum';
-import { WorkerEligibilityMode } from 'src/service-types/service-type.constants';
+import {
+  RecurrenceType,
+  WorkerEligibilityMode,
+} from 'src/service-types/service-type.constants';
 import { ServiceTypesService } from 'src/service-types/service-types.service';
 import { WorkersService } from 'src/workers/workers.service';
 import { AutoGenerationPreviewDto } from './dto/auto-generation-preview.dto';
@@ -69,49 +72,56 @@ export class ScheduleAutoGenerationService {
   ) {}
 
   async preview(dto: AutoGenerationPreviewDto) {
-    const serviceTypeCode = dto.service_type ?? 'main';
-    const serviceType = await this.serviceTypesService.getByCode(
-      serviceTypeCode,
-      true,
+    const requestedServiceTypes = dto.service_types?.length
+      ? [...new Set(dto.service_types)]
+      : [dto.service_type ?? 'main'];
+    const serviceTypes = await Promise.all(
+      requestedServiceTypes.map((code) =>
+        this.serviceTypesService.getByCode(code, true),
+      ),
     );
 
-    if (
-      !serviceType.auto_generation_enabled ||
-      serviceType.recurrence.type !== 'weekly' ||
-      serviceType.recurrence.weekday === undefined
-    ) {
-      throw new BadRequestException(
-        `${serviceType.name} is not available for monthly auto-generation`,
-      );
-    }
+    serviceTypes.forEach((serviceType) => {
+      if (
+        !serviceType.auto_generation_enabled ||
+        serviceType.recurrence.type !== RecurrenceType.Weekly ||
+        serviceType.recurrence.weekday === undefined
+      ) {
+        throw new BadRequestException(
+          `${serviceType.name} is not available for monthly auto-generation`,
+        );
+      }
+    });
 
     const includeOptionalRoles = dto.includeOptionalRoles ?? true;
     const monthStart = new Date(Date.UTC(dto.year, dto.month - 1, 1));
     const nextMonthStart = new Date(Date.UTC(dto.year, dto.month, 1));
     const previousMonthStart = new Date(Date.UTC(dto.year, dto.month - 2, 1));
 
-    const [
-      activeWorkersResult,
-      monthSchedules,
-      recentServiceSchedules,
-      unavailableWorkerIdsByDate,
-    ] =
+    const [activeWorkersResult, monthSchedules, unavailableWorkerIdsByDate] =
       await Promise.all([
         this.workersService.getWorkers(WorkerStatus.Active),
         this.schedulesRepository.findSchedulesInDateRange(
           monthStart,
           nextMonthStart,
         ),
-        this.schedulesRepository.findSchedulesInDateRange(
-          previousMonthStart,
-          nextMonthStart,
-          serviceType.code,
-        ),
         this.workerUnavailabilityService.getUnavailableWorkerIds(
           monthStart,
           nextMonthStart,
         ),
       ]);
+    const recentSchedulesByServiceType = new Map(
+      await Promise.all(
+        serviceTypes.map(async (serviceType) => [
+          serviceType.code,
+          await this.schedulesRepository.findSchedulesInDateRange(
+            previousMonthStart,
+            nextMonthStart,
+            serviceType.code,
+          ),
+        ] as const),
+      ),
+    );
 
     const activeWorkers = await Promise.all(
       (activeWorkersResult.items as unknown as WorkerCandidate[]).map(
@@ -121,91 +131,111 @@ export class ScheduleAutoGenerationService {
         }),
       ),
     );
-    const fairnessScores = this.buildFairnessScores(
-      activeWorkers,
-      recentServiceSchedules as ScheduleLike[],
-    );
     const monthSchedulesByDate = this.groupSchedulesByDate(
       monthSchedules as ScheduleLike[],
     );
-    const slots = [...serviceType.assignment_slots]
-      .sort((a, b) => a.display_order - b.display_order)
-      .filter((slot) => slot.required || includeOptionalRoles);
+    const reservedWorkerIdsByDate = new Map<string, Set<string>>();
+    const workerPools = new Map(
+      (dto.worker_pools ?? []).map((pool) => [
+        `${pool.service_type}:${pool.slot_key}`,
+        new Set(pool.worker_ids),
+      ]),
+    );
+    const rows: AutoGenerationPreviewRow[] = [];
 
-    const rows = this.getDatesInMonth(
-      dto.year,
-      dto.month,
-      serviceType.recurrence.weekday,
-    ).map((date) => {
-      const dateKey = this.toDateKey(date);
-      const schedulesOnDate = monthSchedulesByDate.get(dateKey) ?? [];
-      const existingServiceSchedule = schedulesOnDate.find((schedule) => {
-        return schedule.service_type === serviceType.code;
-      });
+    serviceTypes.forEach((serviceType) => {
+      const fairnessScores = this.buildFairnessScores(
+        activeWorkers,
+        (recentSchedulesByServiceType.get(serviceType.code) ?? []) as ScheduleLike[],
+      );
+      const slots = [...serviceType.assignment_slots]
+        .sort((a, b) => a.display_order - b.display_order)
+        .filter((slot) => slot.required || includeOptionalRoles);
 
-      if (existingServiceSchedule) {
-        return {
-          date: dateKey,
-          service_type: serviceType.code,
-          status: 'skipped' as const,
-          assignments: [],
-          warnings: [
-            `A ${serviceType.name} schedule already exists for this date.`,
-          ],
-        };
-      }
+      this.getDatesInMonth(
+        dto.year,
+        dto.month,
+        serviceType.recurrence.weekday!,
+      ).forEach((date) => {
+        const dateKey = this.toDateKey(date);
+        const schedulesOnDate = monthSchedulesByDate.get(dateKey) ?? [];
+        const existingServiceSchedule = schedulesOnDate.find((schedule) => {
+          return schedule.service_type === serviceType.code;
+        });
 
-      const usedWorkerIds = this.getAssignedWorkerIds(schedulesOnDate);
-      unavailableWorkerIdsByDate.get(dateKey)?.forEach((workerId) => {
-        usedWorkerIds.add(workerId);
-      });
-      const assignments: AutoGeneratedAssignment[] = [];
-      const warnings: string[] = [];
-
-      slots.forEach((slot) => {
-        const selected = this.selectWorkerForSlot(
-          slot as AssignmentSlotRule,
-          serviceType.worker_eligibility as EligibilityRule,
-          activeWorkers,
-          usedWorkerIds,
-          fairnessScores,
-          dto.allowYouthBackupFallback ?? true,
-          serviceType.code,
-        );
-
-        if (!selected) {
-          if (slot.required) {
-            warnings.push(`Missing required assignment: ${slot.label}`);
-          }
+        if (existingServiceSchedule) {
+          rows.push({
+            date: dateKey,
+            service_type: serviceType.code,
+            status: 'skipped',
+            assignments: [],
+            warnings: [
+              `A ${serviceType.name} schedule already exists for this date.`,
+            ],
+          });
           return;
         }
 
-        const workerId = this.toId(selected.worker._id);
-        usedWorkerIds.add(workerId);
-        assignments.push({
-          slot_key: slot.key,
-          role: selected.role,
-          worker_id: workerId,
-          worker_name: selected.worker.name,
+        const usedWorkerIds = this.getAssignedWorkerIds(schedulesOnDate);
+        reservedWorkerIdsByDate.get(dateKey)?.forEach((workerId) => {
+          usedWorkerIds.add(workerId);
         });
-        this.incrementFairnessScore(fairnessScores, workerId, date);
-      });
+        unavailableWorkerIdsByDate.get(dateKey)?.forEach((workerId) => {
+          usedWorkerIds.add(workerId);
+        });
+        const assignments: AutoGeneratedAssignment[] = [];
+        const warnings: string[] = [];
 
-      return {
-        date: dateKey,
-        service_type: serviceType.code,
-        status: warnings.length
-          ? ('needs_attention' as const)
-          : ('generated' as const),
-        assignments,
-        warnings,
-      };
+        slots.forEach((slot) => {
+          const selected = this.selectWorkerForSlot(
+            slot as AssignmentSlotRule,
+            serviceType.worker_eligibility as EligibilityRule,
+            activeWorkers,
+            usedWorkerIds,
+            fairnessScores,
+            dto.allowYouthBackupFallback ?? true,
+            serviceType.code,
+            workerPools.get(`${serviceType.code}:${slot.key}`),
+          );
+
+          if (!selected) {
+            if (slot.required) {
+              warnings.push(`Missing required assignment: ${slot.label}`);
+            }
+            return;
+          }
+
+          const workerId = this.toId(selected.worker._id);
+          usedWorkerIds.add(workerId);
+          assignments.push({
+            slot_key: slot.key,
+            role: selected.role,
+            worker_id: workerId,
+            worker_name: selected.worker.name,
+          });
+          this.incrementFairnessScore(fairnessScores, workerId, date);
+        });
+
+        const reservedWorkerIds = reservedWorkerIdsByDate.get(dateKey) ?? new Set();
+        assignments.forEach((assignment) => {
+          reservedWorkerIds.add(assignment.worker_id);
+        });
+        reservedWorkerIdsByDate.set(dateKey, reservedWorkerIds);
+        rows.push({
+          date: dateKey,
+          service_type: serviceType.code,
+          status: warnings.length ? 'needs_attention' : 'generated',
+          assignments,
+          warnings,
+        });
+      });
     });
 
     return {
       year: dto.year,
       month: dto.month,
-      service_type: serviceType.code,
+      service_type: serviceTypes[0].code,
+      service_types: serviceTypes.map((serviceType) => serviceType.code),
       rows,
     };
   }
@@ -218,7 +248,7 @@ export class ScheduleAutoGenerationService {
 
     return (
       serviceType.auto_generation_enabled &&
-      serviceType.recurrence.type === 'weekly' &&
+      serviceType.recurrence.type === RecurrenceType.Weekly &&
       date.getUTCDay() === serviceType.recurrence.weekday
     );
   }
@@ -231,6 +261,7 @@ export class ScheduleAutoGenerationService {
     fairnessScores: Map<string, FairnessScore>,
     allowConfiguredFallback: boolean,
     serviceTypeCode: string,
+    allowedWorkerIds?: Set<string>,
   ) {
     let eligibility = slot.worker_eligibility_override ?? serviceEligibility;
 
@@ -249,6 +280,7 @@ export class ScheduleAutoGenerationService {
     const candidates = workers.filter((worker) => {
       return (
         worker.status === WorkerStatus.Active &&
+        (!allowedWorkerIds || allowedWorkerIds.has(this.toId(worker._id))) &&
         slot.allowed_roles.some((role) => worker.roles?.includes(role)) &&
         !usedWorkerIds.has(this.toId(worker._id)) &&
         this.isWorkerEligible(worker, eligibility)

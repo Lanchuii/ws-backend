@@ -140,6 +140,50 @@ describe('ScheduleAutoGenerationService', () => {
     ]);
   });
 
+  it('generates multiple service types without reusing a worker on the same date', async () => {
+    const preview = await service.preview({
+      year: 2026,
+      month: 8,
+      service_types: [ServiceType.Main, ServiceType.Yanson],
+    });
+
+    expect(preview.service_types).toEqual([
+      ServiceType.Main,
+      ServiceType.Yanson,
+    ]);
+    expect(new Set(preview.rows.map((row) => row.service_type))).toEqual(
+      new Set([ServiceType.Main, ServiceType.Yanson]),
+    );
+
+    const rowsOnFirstSunday = preview.rows.filter(
+      (row) => row.date === '2026-08-02',
+    );
+    const assignedWorkerIds = rowsOnFirstSunday.flatMap((row) =>
+      row.assignments.map((assignment) => assignment.worker_id),
+    );
+    expect(new Set(assignedWorkerIds).size).toBe(assignedWorkerIds.length);
+  });
+
+  it('limits a slot to its preselected server pool', async () => {
+    const preview = await service.preview({
+      year: 2026,
+      month: 7,
+      service_types: [ServiceType.Main],
+      worker_pools: [{
+        service_type: ServiceType.Main,
+        slot_key: 'acoustic',
+        worker_ids: ['acoustic-main-2'],
+      }],
+    });
+
+    expect(preview.rows.every((row) =>
+      row.assignments.some((assignment) =>
+        assignment.slot_key === 'acoustic' &&
+        assignment.worker_id === 'acoustic-main-2',
+      ),
+    )).toBe(true);
+  });
+
   it('uses Keyboard when it is the available Midweek instrument', async () => {
     workersService.getWorkers.mockResolvedValue({
       items: workers.filter((item) => {

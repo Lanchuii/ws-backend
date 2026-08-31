@@ -718,6 +718,7 @@ describe('SchedulesService', () => {
     expect(result.summary).toEqual({ submitted: 1, created: 0, failed: 1 });
     expect(result.items[0]).toMatchObject({
       date: '2099-07-12',
+      service_type: ServiceType.Main,
       status: 'failed',
       message: 'Missing required assignments: Bass, Drums',
     });
@@ -739,7 +740,10 @@ describe('SchedulesService', () => {
       ],
     });
 
-    expect(result.items[0].schedule.service_type).toBe(ServiceType.Youth);
+    expect(result.items[0]).toMatchObject({
+      service_type: ServiceType.Youth,
+      schedule: { service_type: ServiceType.Youth },
+    });
     expect(repository.findScheduleOnDate).toHaveBeenCalledWith(
       expect.any(Date),
       ServiceType.Youth,
